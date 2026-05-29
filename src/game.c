@@ -72,7 +72,7 @@ void game_new(Game *g, uint32_t seed) {
                     g->player.facing);
 
     msg_push(&g->log, "You jack into the corrupted floppy.");
-    msg_push(&g->log, "WASD move  QEZC diag  > descend  i inventory  ? help");
+    msg_push(&g->log, "WASD move  QE turn  > descend  i inv  ? help");
     g->state = GS_PLAYING;
 }
 
@@ -80,11 +80,29 @@ void game_step(Game *g, int dx, int dy, int action) {
     if (g->state != GS_PLAYING) return;
     g->took_turn = 0;
 
-    if (dx || dy) {
-        /* Update facing on any directional input (even if blocked). */
-        g->player.facing.x = dx;
-        g->player.facing.y = dy;
+    /* Turn-in-place: rotate facing 90 degrees, do NOT consume a turn. */
+    if (action == ACT_TURN_L || action == ACT_TURN_R) {
+        int fx = g->player.facing.x;
+        int fy = g->player.facing.y;
+        if (fx == 0 && fy == 0) { fy = -1; }
+        if (action == ACT_TURN_L) {
+            /* 90 deg CCW: (x,y) -> (y, -x) */
+            g->player.facing.x = fy;
+            g->player.facing.y = -fx;
+        } else {
+            /* 90 deg CW:  (x,y) -> (-y, x) */
+            g->player.facing.x = -fy;
+            g->player.facing.y = fx;
+        }
+        map_compute_fov(&g->map, g->player.pos.x, g->player.pos.y, FOV_RADIUS,
+                        g->player.facing);
+        return;
+    }
 
+    if (dx || dy) {
+        /* In 3D mode, dx/dy is the world-space step computed from facing
+         * (forward / back / strafe). Facing itself is NOT changed by W/S/A/D
+         * - use Q/E to turn. */
         int nx = g->player.pos.x + dx;
         int ny = g->player.pos.y + dy;
         Mob *target = mob_at(g, nx, ny);
