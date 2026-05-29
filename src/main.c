@@ -69,15 +69,27 @@ static int run_screenshots(void) {
     game_render(&g, bmp);
     tigrSaveImage("screenshots/title.png", bmp);
 
-    /* Gameplay shot: descend two floors, reveal map, simulate a fight. */
+    /* Gameplay shot: pose the player one tile away from a mob, facing it,
+     * so the 3D view actually contains an enemy sprite. */
     game_new(&g, 42);
-    game_step(&g, 0, 0, ACT_DESCEND);
-    /* Force the player into combat range of a mob if possible. */
-    for (int i = 0; i < g.n_mobs; ++i) {
-        if (!g.mobs[i].alive) continue;
-        if (map_walkable(&g.map, g.mobs[i].pos.x + 1, g.mobs[i].pos.y)) {
-            g.player.pos = (V2){ g.mobs[i].pos.x + 1, g.mobs[i].pos.y };
-            break;
+    {
+        static const int dxs[4] = {  0,  0, -1,  1 };
+        static const int dys[4] = {  1, -1,  0,  0 };
+        static const int fxs[4] = {  0,  0,  1, -1 };
+        static const int fys[4] = { -1,  1,  0,  0 };
+        for (int i = 0; i < g.n_mobs; ++i) {
+            if (!g.mobs[i].alive) continue;
+            int mx = g.mobs[i].pos.x, my = g.mobs[i].pos.y;
+            int placed = 0;
+            for (int d = 0; d < 4 && !placed; ++d) {
+                int px = mx + dxs[d], py = my + dys[d];
+                if (map_walkable(&g.map, px, py)) {
+                    g.player.pos    = (V2){ px, py };
+                    g.player.facing = (V2){ fxs[d], fys[d] };
+                    placed = 1;
+                }
+            }
+            if (placed) break;
         }
     }
     msg_push(&g.log, "You hit the bit for 5.");
