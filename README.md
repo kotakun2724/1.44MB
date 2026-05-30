@@ -1,9 +1,11 @@
 # 1.44 MB :: Sectors of the Lost Disk
 
-A classic dungeon-crawl **roguelike** that fits on a single 3.5-inch HD floppy
-disk. The whole game (executable, font, data, everything) is a **33,280-byte
-standalone Windows executable** -- about 2.3 % of the 1,474,560-byte floppy
-budget.
+A **first-person 3D dungeon-crawl roguelike** that fits on a single 3.5-inch
+HD floppy disk. Doom-style textured walls, grid-locked movement,
+turn-based combat -- in the spirit of *Wizardry*, *Eye of the Beholder*,
+and *Legend of Grimrock*. The whole game (executable, font, textures,
+data, everything) is a **36,864-byte standalone Windows executable** --
+about 2.5 % of the 1,474,560-byte floppy budget.
 
 Built for the [1.44MB GAME_DEV CONTEST](https://2pgarcade.com/contest-144mb.html).
 
@@ -18,10 +20,19 @@ You are the last data-recovery routine in memory. Jack in, descend through
 
 ## Gameplay
 
-A turn-based dungeon crawler in the tradition of *Rogue* and *NetHack*:
+A turn-based dungeon crawler with a real-time-feel **column-based raycaster**
+in the tradition of *Wolfenstein 3D* and *Doom*, played in the tradition of
+*Wizardry* and *Rogue*:
 
 - 15 procedurally generated floors built with recursive BSP partitioning
-- Symmetric raycast field-of-view with tile memory
+- **Textured 3D first-person view** rendered with DDA wall casting,
+  perspective-correct floor / ceiling mapping, distance fade,
+  and depth-buffered scaled sprites
+- 6 hand-generated wall textures (metal panel, concrete, BIOS chip,
+  blood-stained steel, floppy label, steel door) -- procedurally drawn
+  on first frame so no texture bytes ship in the binary
+- Symmetric raycast field-of-view with tile memory; the **minimap** in
+  the bottom right shows everything you've explored
 - 11 regular enemies + 3 unique bosses on the checkpoint floors (5, 10, 15)
 - 20-item table: weapons, armor, patches (potions), scrolls, food
 - Unidentified patches and scrolls get random pseudo-names (`red patch`,
@@ -35,17 +46,25 @@ A turn-based dungeon crawler in the tradition of *Rogue* and *NetHack*:
 
 ### Controls
 
+Movement is **grid-locked** and **turn-based**: one keypress = one tile.
+
 ```
-W A S D         move (north / west / south / east)
-Q E Z C         move diagonally (NW / NE / SW / SE)
-arrows          cardinal directions
-hjkl / yubn     vim-style aliases
+W               step forward (1 tile, facing direction)
+S               step backward (1 tile)
+A               strafe left
+D               strafe right
+Q               turn 90 deg left   (does NOT consume a turn)
+E               turn 90 deg right  (does NOT consume a turn)
 .   space       wait one turn
 >               descend stairs
 i               open inventory
 ?               in-game help
 ESC             abandon run (returns to title)
 ```
+
+Walking into an enemy attacks it (bump-to-attack). Facing is restricted to
+the four cardinal directions; `Q` and `E` rotate the camera 90 degrees in
+place and do not cost a turn, so you can survey the room freely.
 
 In inventory: `a-p` use/equip an item, `D` (capital) then `<letter>` drop, `i`/`ESC` close.
 
@@ -81,11 +100,14 @@ of a 1.44 MB 3.5-inch HD floppy. The actual numbers from this build:
 | Artifact                              | Size      | % of 1.44 MB |
 |---------------------------------------|----------:|-------------:|
 | Mac build (`clang -Os -flto`)         |    69 KB |          5 % |
-| Win build (`mingw -Os -flto -s`)      |   131 KB |          9 % |
-| Win build + `upx --best --lzma`       |  **33 KB** |    **2.3 %** |
+| Win build (`mingw -Os -flto -s`)      |   174 KB |         12 % |
+| Win build + `upx --best --lzma`       |  **36 KB** |    **2.5 %** |
 
-We leave **1,441,280 bytes** unused on the floppy. The game would actually
-fit on a 360 KB 5.25-inch floppy from 1983 with room to spare.
+The 3D renderer added only ~3.5 KB to the UPX-compressed binary because
+the wall / floor / ceiling textures are **generated procedurally on
+startup** -- no texture bytes ship in the file. We leave **1,437,696 bytes**
+unused on the floppy. The game would still fit on a 360 KB 5.25-inch floppy
+from 1983 with room to spare.
 
 The full per-stage size log is in [`size-log.md`](size-log.md).
 
@@ -99,7 +121,11 @@ Pure C99, statically linked, **no runtime dependencies**:
 - [src/mob.c](src/mob.c) -- spawning, AI (chase / erratic / teleport), combat
 - [src/item.c](src/item.c) -- inventory, equipment, identification, effects
 - [src/score.c](src/score.c) -- binary high-score persistence (`score.dat`)
-- [src/ui.c](src/ui.c) -- rendering (title, help, hiscore, inventory, map)
+- [src/ui.c](src/ui.c) -- screens (title, help, hiscore, inventory) +
+  3D viewport / minimap / status panel composition
+- [src/render3d.c](src/render3d.c) -- Wolfenstein-style raycaster: procedural
+  wall / floor / ceiling textures, DDA wall casting, perspective-correct
+  floor mapping, distance fade, depth-buffered sprite blits, minimap
 - [src/rng.c](src/rng.c) -- 32-bit xorshift PRNG
 - [src/data.c](src/data.c) -- static tables: monsters, items, pseudo-names
 - [src/game.h](src/game.h) -- all shared types and prototypes

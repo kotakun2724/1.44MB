@@ -118,13 +118,14 @@ static void render_help(Tigr *screen) {
     center(screen, 2, C_ACCENT, "==== HELP ====");
 
     static const char *lines[] = {
-        "MOVEMENT",
-        "  W A S D        north / west / south / east",
-        "  Q E Z C        diagonals (NW / NE / SW / SE)",
-        "  arrows         cardinal directions",
-        "  H J K L        vim-style aliases",
-        "  Y U B N        vim-style diagonals",
-        "  .  space       wait a turn",
+        "MOVEMENT (first-person, grid + turn-based)",
+        "  W              step forward",
+        "  S              step backward",
+        "  A              strafe left",
+        "  D              strafe right",
+        "  Q              turn 90 deg left   (no turn consumed)",
+        "  E              turn 90 deg right  (no turn consumed)",
+        "  .  space       wait one turn",
         "",
         "ACTIONS",
         "  >              descend stairs",
@@ -147,7 +148,8 @@ static void render_help(Tigr *screen) {
         "  k kraken   N null pointer",
         "  D / K / M  bosses on floors 5 / 10 / 15",
         "",
-        "Survive deep enough and recover the lost data."
+        "Walk into a foe to attack. The minimap (bottom right)",
+        "shows the layout you have explored so far."
     };
     int n = (int)(sizeof(lines) / sizeof(lines[0]));
     int line_h = 11;
@@ -256,51 +258,46 @@ void game_render(Game *g, Tigr *screen) {
 
     tigrClear(screen, C_BG);
 
-    /* ---- Top: message log (newest at top) ---- */
+    /* Layout (640x400):
+     *   0   .. 279   3D viewport  (full width, 280 high)
+     *   280          1px border
+     *   281 .. 399   bottom panel: log (left), status (left), minimap (right)
+     */
+    const int V3D_X = 0,   V3D_Y = 0,   V3D_W = SCREEN_W, V3D_H = 280;
+    const int MINI_CELL = 2;                              /* px per tile */
+    const int MINI_W = MAP_W * MINI_CELL;                 /* 160 */
+    const int MINI_H = MAP_H * MINI_CELL;                 /* 80  */
+    const int MINI_X = SCREEN_W - MINI_W - 2;             /* 478 */
+    const int MINI_Y = V3D_H + 10;                        /* 290 */
+    const int PANEL_TOP = V3D_H + 1;                      /* 281 */
+    const int LEFT_PAD = 8;
+    const int LOG_PX_Y = PANEL_TOP + 1;                   /* 282 */
+    const int LOG_LINE_H = 10;
+    const int STAT_PX_Y = LOG_PX_Y + LOG_ROWS * LOG_LINE_H + 2;  /* 314 */
+
+    /* 3D viewport. */
+    render3d_draw(g, screen, V3D_X, V3D_Y, V3D_W, V3D_H);
+
+    /* Border between 3D view and bottom panel. */
+    for (int x = 0; x < SCREEN_W; ++x) tigrPlot(screen, x, V3D_H, C_BORDER);
+
+    /* Message log (newest at top). */
     for (int i = 0; i < LOG_ROWS; ++i) {
         TPixel c = (i == 0) ? C_TEXT : C_DIM;
-        puts_at(screen, 1, LOG_TOP + i, c, msg_at(&g->log, i));
-    }
-    hline(screen, LOG_TOP + LOG_ROWS, C_BORDER);
-
-    /* ---- Middle: map ---- */
-    for (int y = 0; y < MAP_H; ++y) {
-        for (int x = 0; x < MAP_W; ++x) {
-            draw_tile(screen, x, MAP_TOP + y, x, y, &g->map);
-        }
+        puts_px(screen, LEFT_PAD / CELL_W, LOG_PX_Y + i * LOG_LINE_H, c,
+                msg_at(&g->log, i));
     }
 
-    /* Floor items (visible only). */
-    for (int i = 0; i < g->n_floor; ++i) {
-        FloorItem *f = &g->floor[i];
-        if (!f->active) continue;
-        if (!g->map.visible[f->pos.y][f->pos.x]) continue;
-        const ItemDef *d = &ITEMS[f->def];
-        putc_at(screen, f->pos.x, MAP_TOP + f->pos.y, d->color, d->glyph);
-    }
-
-    /* Mobs (only when in current FOV). */
-    for (int i = 0; i < g->n_mobs; ++i) {
-        Mob *m = &g->mobs[i];
-        if (!m->alive) continue;
-        if (!g->map.visible[m->pos.y][m->pos.x]) continue;
-        const MobType *t = &MOB_TYPES[m->kind];
-        putc_at(screen, m->pos.x, MAP_TOP + m->pos.y, t->color, t->glyph);
-    }
-
-    /* Player. */
-    putc_at(screen, g->player.pos.x, MAP_TOP + g->player.pos.y, C_PLAYER, '@');
-
-    /* ---- Bottom: status bar ---- */
-    hline(screen, MAP_BOTTOM, C_BORDER);
+    /* Status line + tagline. */
     char buf[128];
     int need = 10 * g->player.level;
     const char *hunger_tag =
         g->player.hunger >= HUNGER_STARVING ? " STARVING" :
         g->player.hunger >= HUNGER_HUNGRY   ? " Hungry"   : "";
-    int is_boss = (g->player.depth == 5 || g->player.depth == 10 || g->player.depth == FINAL_DEPTH);
+    int is_boss = (g->player.depth == 5 || g->player.depth == 10
+                   || g->player.depth == FINAL_DEPTH);
     snprintf(buf, sizeof buf,
-             "Sector %02d%s  HP %d/%d  ATK %d  DEF %d  Lv %d  XP %d/%d  T %d%s",
+             "Sec %02d%s HP %d/%d ATK %d DEF %d Lv %d XP %d/%d T %d%s",
              g->player.depth, is_boss ? "!" : " ",
              g->player.hp, g->player.hp_max,
              player_total_atk(g), player_total_def(g),
@@ -308,22 +305,36 @@ void game_render(Game *g, Tigr *screen) {
              g->player.xp, need,
              g->player.turn,
              hunger_tag);
-    TPixel hp_col = (g->player.hp * 3 < g->player.hp_max) ? tigrRGB(255,100,100) : C_TEXT;
-    puts_at(screen, 1, STATUS_TOP, hp_col, buf);
+    TPixel hp_col = (g->player.hp * 3 < g->player.hp_max)
+        ? tigrRGB(255, 100, 100) : C_TEXT;
+    puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y, hp_col, buf);
 
     if (g->state == GS_DEAD) {
-        puts_at(screen, 1, STATUS_TOP + 1, tigrRGB(255, 80, 80),
+        puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H,
+                tigrRGB(255, 80, 80),
                 "*** SEGMENTATION FAULT - press any key ***");
     } else if (g->state == GS_WIN) {
-        puts_at(screen, 1, STATUS_TOP + 1, tigrRGB(120, 255, 120),
+        puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H,
+                tigrRGB(120, 255, 120),
                 "*** DATA RECOVERED - press any key ***");
     } else if (is_boss) {
-        puts_at(screen, 1, STATUS_TOP + 1, tigrRGB(255, 180, 80),
+        puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H,
+                tigrRGB(255, 180, 80),
                 "!! BOSS SECTOR - a corruption awaits !!");
     } else {
-        puts_at(screen, 1, STATUS_TOP + 1, C_ACCENT,
-                "1.44MB :: Sectors of the Lost Disk");
+        puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H, C_DIM,
+                "WASD move  QE turn  . wait  > descend  i inv  ? help");
     }
-    puts_at(screen, 1, STATUS_TOP + 2, C_DIM,
-            "WASD move  QEZC diag  . wait  > descend  i inv  ? help  ESC quit");
+
+    /* Minimap (top-right of bottom panel). */
+    /* 1px frame around it. */
+    for (int x = -1; x <= MINI_W; ++x) {
+        tigrPlot(screen, MINI_X + x, MINI_Y - 1,       C_BORDER);
+        tigrPlot(screen, MINI_X + x, MINI_Y + MINI_H,  C_BORDER);
+    }
+    for (int y = -1; y <= MINI_H; ++y) {
+        tigrPlot(screen, MINI_X - 1,        MINI_Y + y, C_BORDER);
+        tigrPlot(screen, MINI_X + MINI_W,   MINI_Y + y, C_BORDER);
+    }
+    render3d_minimap(g, screen, MINI_X, MINI_Y, MINI_CELL);
 }

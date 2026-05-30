@@ -1,39 +1,37 @@
 #include "game.h"
 #include <time.h>
 
-/* Returns 1 if a play action was generated; 2 to quit. */
-static int play_input(Tigr *screen, int c, int *dx, int *dy, int *action) {
+/* Returns 1 if a play action was generated; 2 to quit.
+ *
+ * 3D first-person input scheme (grid-locked, turn-based):
+ *   W / S       step forward / backward (relative to facing)
+ *   A / D       strafe left / right
+ *   Q / E       turn 90 deg left / right (does NOT consume a turn)
+ *   . space     wait one turn
+ *   >           descend stairs
+ * Diagonal / vim / arrow keys are intentionally removed - they don't map
+ * cleanly onto a 4-direction first-person view.
+ */
+static int play_input(Tigr *screen, int c, int *dx, int *dy, int *action,
+                      const Player *p) {
+    (void)screen;
     *dx = *dy = 0; *action = ACT_NONE;
+    int fx = p->facing.x, fy = p->facing.y;
+    if (fx == 0 && fy == 0) { fy = -1; }
+    /* Right-hand strafe vector = facing rotated 90 deg CW = (-fy, fx). */
+    int rx = -fy, ry = fx;
     if (c > 0) {
         switch (c) {
-            /* WASD primary cardinals. */
-            case 'a': case 'A': *dx = -1; return 1;
-            case 'd': case 'D': *dx =  1; return 1;
-            case 'w': case 'W': *dy = -1; return 1;
-            case 's': case 'S': *dy =  1; return 1;
-            /* QEZC diagonals. */
-            case 'q': case 'Q': *dx = -1; *dy = -1; return 1;
-            case 'e': case 'E': *dx =  1; *dy = -1; return 1;
-            case 'z': case 'Z': *dx = -1; *dy =  1; return 1;
-            case 'c': case 'C': *dx =  1; *dy =  1; return 1;
-            /* hjkl / yubn kept as a silent alternative for vim folks. */
-            case 'h': case 'H': *dx = -1; return 1;
-            case 'l': case 'L': *dx =  1; return 1;
-            case 'k': case 'K': *dy = -1; return 1;
-            case 'j': case 'J': *dy =  1; return 1;
-            case 'y': case 'Y': *dx = -1; *dy = -1; return 1;
-            case 'u': case 'U': *dx =  1; *dy = -1; return 1;
-            case 'b': case 'B': *dx = -1; *dy =  1; return 1;
-            case 'n': case 'N': *dx =  1; *dy =  1; return 1;
+            case 'w': case 'W': *dx =  fx; *dy =  fy; return 1;
+            case 's': case 'S': *dx = -fx; *dy = -fy; return 1;
+            case 'a': case 'A': *dx = -rx; *dy = -ry; return 1;
+            case 'd': case 'D': *dx =  rx; *dy =  ry; return 1;
+            case 'q': case 'Q': *action = ACT_TURN_L; return 1;
+            case 'e': case 'E': *action = ACT_TURN_R; return 1;
             case '.': case ' ': *action = ACT_WAIT;    return 1;
             case '>':           *action = ACT_DESCEND; return 1;
-            /* No quit-by-letter during play; use ESC. */
         }
     }
-    if (tigrKeyDown(screen, TK_LEFT))  { *dx = -1; return 1; }
-    if (tigrKeyDown(screen, TK_RIGHT)) { *dx =  1; return 1; }
-    if (tigrKeyDown(screen, TK_UP))    { *dy = -1; return 1; }
-    if (tigrKeyDown(screen, TK_DOWN))  { *dy =  1; return 1; }
     return 0;
 }
 
@@ -71,15 +69,27 @@ static int run_screenshots(void) {
     game_render(&g, bmp);
     tigrSaveImage("screenshots/title.png", bmp);
 
-    /* Gameplay shot: descend two floors, reveal map, simulate a fight. */
+    /* Gameplay shot: pose the player one tile away from a mob, facing it,
+     * so the 3D view actually contains an enemy sprite. */
     game_new(&g, 42);
-    game_step(&g, 0, 0, ACT_DESCEND);
-    /* Force the player into combat range of a mob if possible. */
-    for (int i = 0; i < g.n_mobs; ++i) {
-        if (!g.mobs[i].alive) continue;
-        if (map_walkable(&g.map, g.mobs[i].pos.x + 1, g.mobs[i].pos.y)) {
-            g.player.pos = (V2){ g.mobs[i].pos.x + 1, g.mobs[i].pos.y };
-            break;
+    {
+        static const int dxs[4] = {  0,  0, -1,  1 };
+        static const int dys[4] = {  1, -1,  0,  0 };
+        static const int fxs[4] = {  0,  0,  1, -1 };
+        static const int fys[4] = { -1,  1,  0,  0 };
+        for (int i = 0; i < g.n_mobs; ++i) {
+            if (!g.mobs[i].alive) continue;
+            int mx = g.mobs[i].pos.x, my = g.mobs[i].pos.y;
+            int placed = 0;
+            for (int d = 0; d < 4 && !placed; ++d) {
+                int px = mx + dxs[d], py = my + dys[d];
+                if (map_walkable(&g.map, px, py)) {
+                    g.player.pos    = (V2){ px, py };
+                    g.player.facing = (V2){ fxs[d], fys[d] };
+                    placed = 1;
+                }
+            }
+            if (placed) break;
         }
     }
     msg_push(&g.log, "You hit the bit for 5.");
@@ -146,7 +156,7 @@ int main(int argc, char *argv[]) {
                 game.state = GS_TITLE;
             } else {
                 int dx, dy, action;
-                int r = play_input(screen, c, &dx, &dy, &action);
+                int r = play_input(screen, c, &dx, &dy, &action, &game.player);
                 if (r == 2) {
                     record_run(&game, 0);
                     game.state = GS_TITLE;

@@ -245,11 +245,20 @@ void game_new(Game *g, uint32_t seed);
 void game_step(Game *g, int dx, int dy, int action);  /* one turn          */
 void game_render(Game *g, Tigr *screen);
 
-/* Actions (non-movement). Movement uses dx/dy != 0. */
+/* ---- 3D renderer (see src/render3d.c) ----------------------------------*/
+void render3d_init(void);
+void render3d_draw(Game *g, Tigr *s, int x0, int y0, int vw, int vh);
+void render3d_minimap(Game *g, Tigr *s, int x0, int y0, int cell);
+
+/* Actions (non-movement). Movement uses dx/dy != 0.
+ * ACT_TURN_L / ACT_TURN_R rotate the player's facing 90 degrees without
+ * consuming a turn (mobs do not act). */
 enum {
     ACT_NONE = 0,
     ACT_WAIT,
-    ACT_DESCEND
+    ACT_DESCEND,
+    ACT_TURN_L,
+    ACT_TURN_R
 };
 
 /* ---- Map helpers --------------------------------------------------------*/
