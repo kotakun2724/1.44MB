@@ -34,9 +34,15 @@ WIN_LDFLAGS := -static -mwindows -s \
 WIN_OUT     := build/$(BIN_NAME).exe
 
 # ============================================================================
-.PHONY: all mac win clean size submit run check-size screenshots
+.PHONY: all mac win clean size submit run check-size screenshots assets
 
 all: mac
+
+# Regenerate src/assets_gen.c from the (gitignored) DCSS tileset folder.
+# Requires python3 + ImageMagick (`magick`). Normal builds just compile the
+# already-committed src/assets_gen.c, so this is a dev-only step.
+assets:
+	python3 tools/gen_assets.py
 
 run: mac
 	./$(MAC_OUT)
