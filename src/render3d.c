@@ -1,36 +1,33 @@
 /*
  *  Column-based raycaster renderer (Wolfenstein-style 3D over the existing
- *  grid map). Walls are textured with hand-generated 64x64 paletted tiles,
- *  floor and ceiling use perspective-correct affine mapping, mobs and items
- *  appear as depth-buffered scaled silhouettes with their ASCII glyph on top.
+ *  grid map). Walls, floor and ceiling are textured with embedded Dungeon
+ *  Crawl Stone Soup tiles (CC0); mobs and items are drawn as depth-buffered,
+ *  alpha-tested billboard sprites from the same tileset.
  *
  *  Drawn directly into the TIGR backbuffer via bmp->pix for speed.
  */
 #include "game.h"
+#include "assets.h"
 #include <math.h>
 
-#define TEX_SIZE      64
-#define TEX_MASK      (TEX_SIZE - 1)
-#define NUM_WALL_TEX  6                /* 0..4 generic, 5 = door */
+#define TILE          32               /* DCSS tiles are 32x32 */
+#define TILE_MASK      (TILE - 1)
 #define FOV_PLANE     0.66f            /* tan(33 deg) -> ~66 deg HFOV */
 #define MAX_LINE_MUL  8                /* clamp line_h to vh * MAX_LINE_MUL */
 #define MAX_VIEW_W    640
+#define MAX_WALL_TEX  16
+#define CEIL_DIM      160              /* extra Q8 darken for the ceiling */
 
-static uint8_t g_wall_tex[NUM_WALL_TEX][TEX_SIZE * TEX_SIZE];
-static TPixel  g_wall_pal[NUM_WALL_TEX][16];
-static uint8_t g_floor_tex[TEX_SIZE * TEX_SIZE];
-static TPixel  g_floor_pal[16];
-static uint8_t g_ceil_tex [TEX_SIZE * TEX_SIZE];
-static TPixel  g_ceil_pal [16];
-static int     g_init = 0;
-
-/* Deterministic noise stream for texture generation. */
-static uint32_t tex_rand(uint32_t *s) {
-    uint32_t x = *s;
-    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
-    *s = x;
-    return x;
-}
+/* Decoded tiles (lazily built once on the first frame). */
+static Tigr *g_wall[MAX_WALL_TEX];
+static int   g_wall_n;
+static Tigr *g_floor[4];
+static int   g_floor_n;
+static Tigr *g_ceil;
+static Tigr *g_door;
+static Tigr *g_mob[32];
+static Tigr *g_item[64];
+static int   g_init = 0;
 
 static uint32_t hash_cell(int x, int y) {
     uint32_t h = (uint32_t)x * 73856093u ^ (uint32_t)y * 19349663u;
@@ -40,214 +37,25 @@ static uint32_t hash_cell(int x, int y) {
     return h;
 }
 
-static TPixel rgb_(int r, int g, int b) {
-    TPixel p = { (uint8_t)r, (uint8_t)g, (uint8_t)b, 255 };
-    return p;
-}
-
-/* Linear 16-entry ramp from `a` to `b`. */
-static void ramp(TPixel *pal, TPixel a, TPixel b) {
-    for (int i = 0; i < 16; ++i) {
-        pal[i].r = (uint8_t)(a.r + (b.r - a.r) * i / 15);
-        pal[i].g = (uint8_t)(a.g + (b.g - a.g) * i / 15);
-        pal[i].b = (uint8_t)(a.b + (b.b - a.b) * i / 15);
-        pal[i].a = 255;
-    }
-}
-
-/* ---- Procedural texture generators -------------------------------------- */
-static void gen_metal_panel(uint8_t *tex, TPixel *pal) {
-    ramp(pal, rgb_(20, 22, 28), rgb_(180, 180, 200));
-    uint32_t s = 0xc0ffeeu;
-    for (int y = 0; y < TEX_SIZE; ++y) {
-        for (int x = 0; x < TEX_SIZE; ++x) {
-            int v = 7 + (int)(tex_rand(&s) & 3);
-            if ((y % 16) == 0 || (y % 16) == 15) v = 3;
-            if ((y % 16) == 8 && (x % 16) == 8) v = 13;
-            if ((y % 16) == 8 && ((x + 15) % 16) == 8) v = 11;
-            if (x == 0 || x == 32) v = 2;
-            tex[y * TEX_SIZE + x] = (uint8_t)v;
-        }
-    }
-}
-
-static void gen_concrete(uint8_t *tex, TPixel *pal) {
-    ramp(pal, rgb_(30, 30, 36), rgb_(170, 170, 180));
-    uint32_t s = 0xdeadbeefu;
-    for (int y = 0; y < TEX_SIZE; ++y) {
-        for (int x = 0; x < TEX_SIZE; ++x) {
-            int v = 6 + (int)(tex_rand(&s) % 7);
-            if ((tex_rand(&s) & 0x1f) == 0) v = 2;
-            tex[y * TEX_SIZE + x] = (uint8_t)v;
-        }
-    }
-}
-
-static void gen_bios_chip(uint8_t *tex, TPixel *pal) {
-    /* Dark green PCB + IC body + leaded pins + yellow label. */
-    pal[0]  = rgb_(  8, 12,  8);
-    pal[1]  = rgb_( 12, 30, 16);
-    pal[2]  = rgb_( 16, 50, 24);
-    pal[3]  = rgb_( 20, 70, 30);
-    pal[4]  = rgb_( 28,100, 40);
-    pal[5]  = rgb_( 36,140, 50);
-    pal[6]  = rgb_( 60,180, 80);
-    pal[7]  = rgb_(120,220,140);
-    pal[8]  = rgb_( 50, 50, 60);
-    pal[9]  = rgb_(100,100,110);
-    pal[10] = rgb_(170,170,180);
-    pal[11] = rgb_(220,220,220);
-    pal[12] = rgb_(220,200, 80);
-    pal[13] = rgb_(240,230,130);
-    pal[14] = rgb_(255,240,160);
-    pal[15] = rgb_(255,255,200);
-
-    uint32_t s = 0x12345678u;
-    for (int y = 0; y < TEX_SIZE; ++y) {
-        for (int x = 0; x < TEX_SIZE; ++x) {
-            int v = 2 + (int)(tex_rand(&s) & 1);
-            if ((x % 8) == 0) v = 4;
-            int cx = x - 16, cy = y - 16;
-            if (cx >= 0 && cx < 32 && cy >= 0 && cy < 32) {
-                v = 8;
-                if (cx == 0 || cx == 31 || cy == 0 || cy == 31) v = 9;
-                if (cy >= 12 && cy <= 18 && cx >= 4 && cx <= 26)
-                    if (((cx + cy) & 1) == 0) v = 12;
-                if ((cy == 4 || cy == 27) && (cx % 4) == 0 && cx > 1 && cx < 31)
-                    v = 10;
-            }
-            tex[y * TEX_SIZE + x] = (uint8_t)v;
-        }
-    }
-}
-
-static void gen_blood_metal(uint8_t *tex, TPixel *pal) {
-    pal[0]  = rgb_( 10,  8,  8);
-    pal[1]  = rgb_( 24, 18, 18);
-    pal[2]  = rgb_( 40, 30, 30);
-    pal[3]  = rgb_( 60, 45, 45);
-    pal[4]  = rgb_( 80, 60, 60);
-    pal[5]  = rgb_(100, 75, 75);
-    pal[6]  = rgb_(140,100,100);
-    pal[7]  = rgb_(180,130,130);
-    pal[8]  = rgb_( 60, 10, 10);
-    pal[9]  = rgb_(100, 14, 14);
-    pal[10] = rgb_(140, 20, 20);
-    pal[11] = rgb_(180, 30, 30);
-    pal[12] = rgb_(220, 40, 40);
-    pal[13] = rgb_(255, 60, 60);
-    pal[14] = rgb_(255,100, 80);
-    pal[15] = rgb_(255,160,120);
-
-    uint32_t s = 0xfeedfaceu;
-    for (int y = 0; y < TEX_SIZE; ++y) {
-        for (int x = 0; x < TEX_SIZE; ++x) {
-            int v = 3 + (int)(tex_rand(&s) & 3);
-            if ((y % 16) == 0) v = 1;
-            uint32_t r = tex_rand(&s);
-            if ((r & 0x3f) == 0) v = 9 + (int)(r & 3);
-            tex[y * TEX_SIZE + x] = (uint8_t)v;
-        }
-    }
-    /* Vertical drip streaks. */
-    s = 0xbada55u;
-    for (int dr = 0; dr < 4; ++dr) {
-        int dx = (int)(tex_rand(&s) & TEX_MASK);
-        int len = 12 + (int)(tex_rand(&s) & 31);
-        for (int y = 0; y < len && y < TEX_SIZE; ++y) {
-            int v = 11 - y / 4;
-            if (v < 8) v = 8;
-            tex[y * TEX_SIZE + dx] = (uint8_t)v;
-        }
-    }
-}
-
-static void gen_floppy_label(uint8_t *tex, TPixel *pal) {
-    pal[0]  = rgb_( 20, 12,  8);
-    pal[1]  = rgb_( 40, 20, 10);
-    pal[2]  = rgb_( 80, 40, 16);
-    pal[3]  = rgb_(120, 60, 22);
-    pal[4]  = rgb_(160, 90, 30);
-    pal[5]  = rgb_(200,130, 50);
-    pal[6]  = rgb_(220,170, 80);
-    pal[7]  = rgb_(230,200,130);
-    pal[8]  = rgb_(240,220,180);
-    pal[9]  = rgb_(245,230,200);
-    for (int i = 10; i < 16; ++i) pal[i] = rgb_(250, 240, 220);
-
-    uint32_t s = 0xabcd1234u;
-    for (int y = 0; y < TEX_SIZE; ++y) {
-        for (int x = 0; x < TEX_SIZE; ++x) {
-            int v = 7;
-            if (y < 10) v = 4;
-            if (y > 56) v = 3;
-            if (y >= 18 && y <= 22 && x >= 8 && x <= 56) v = (x & 1) ? 2 : 8;
-            if (y >= 28 && y <= 32 && x >= 8 && x <= 48) v = (x & 1) ? 2 : 8;
-            if (y >= 38 && y <= 42 && x >= 8 && x <= 52) v = (x & 1) ? 2 : 8;
-            if ((tex_rand(&s) & 0xf) == 0) {
-                int n = (int)(tex_rand(&s) & 1);
-                v = n ? v + 1 : v - 1;
-                if (v < 0) v = 0;
-                if (v > 9) v = 9;
-            }
-            tex[y * TEX_SIZE + x] = (uint8_t)v;
-        }
-    }
-}
-
-static void gen_door(uint8_t *tex, TPixel *pal) {
-    ramp(pal, rgb_(12, 14, 20), rgb_(160, 175, 200));
-    uint32_t s = 0xc0c0a55u;
-    for (int y = 0; y < TEX_SIZE; ++y) {
-        for (int x = 0; x < TEX_SIZE; ++x) {
-            int v = 8 + (int)(tex_rand(&s) & 1);
-            if (x < 2 || x > 61 || y < 2 || y > 61) v = 3;
-            if ((x == 8 || x == 55) && y >= 8 && y <= 55) v = 5;
-            if ((y == 8 || y == 55) && x >= 8 && x <= 55) v = 5;
-            int hx = x - 48, hy = y - 30;
-            if (hx >= 0 && hx < 6 && hy >= 0 && hy < 4) v = 13;
-            tex[y * TEX_SIZE + x] = (uint8_t)v;
-        }
-    }
-}
-
-static void gen_floor_tex(uint8_t *tex, TPixel *pal) {
-    ramp(pal, rgb_(20, 22, 30), rgb_(120, 130, 160));
-    uint32_t s = 0xacaba55u;
-    for (int y = 0; y < TEX_SIZE; ++y) {
-        for (int x = 0; x < TEX_SIZE; ++x) {
-            int v = 4 + (int)(tex_rand(&s) & 3);
-            if ((x % 8) == 4 && (y % 8) == 4) v = 11;
-            if ((x % 16) == 0 || (y % 16) == 0) v = 2;
-            tex[y * TEX_SIZE + x] = (uint8_t)v;
-        }
-    }
-}
-
-static void gen_ceil_tex(uint8_t *tex, TPixel *pal) {
-    ramp(pal, rgb_(4, 6, 12), rgb_(180, 200, 255));
-    uint32_t s = 0xfacefeedu;
-    for (int y = 0; y < TEX_SIZE; ++y) {
-        for (int x = 0; x < TEX_SIZE; ++x) {
-            uint32_t r = tex_rand(&s);
-            int v = 1 + (int)(r & 1);
-            if ((r & 0xff) < 4) v = 6 + (int)(r & 7);
-            tex[y * TEX_SIZE + x] = (uint8_t)v;
-        }
-    }
-}
-
 void render3d_init(void) {
     if (g_init) return;
     g_init = 1;
-    gen_metal_panel  (g_wall_tex[0], g_wall_pal[0]);
-    gen_concrete     (g_wall_tex[1], g_wall_pal[1]);
-    gen_bios_chip    (g_wall_tex[2], g_wall_pal[2]);
-    gen_blood_metal  (g_wall_tex[3], g_wall_pal[3]);
-    gen_floppy_label (g_wall_tex[4], g_wall_pal[4]);
-    gen_door         (g_wall_tex[5], g_wall_pal[5]);
-    gen_floor_tex    (g_floor_tex,   g_floor_pal);
-    gen_ceil_tex     (g_ceil_tex,    g_ceil_pal);
+
+    g_wall_n = ASSET_WALL_N < MAX_WALL_TEX ? ASSET_WALL_N : MAX_WALL_TEX;
+    for (int i = 0; i < g_wall_n; ++i)
+        g_wall[i] = tigrLoadImageMem(ASSET_WALL[i].png, ASSET_WALL[i].len);
+
+    g_floor_n = ASSET_FLOOR_N < 4 ? ASSET_FLOOR_N : 4;
+    for (int i = 0; i < g_floor_n; ++i)
+        g_floor[i] = tigrLoadImageMem(ASSET_FLOOR[i].png, ASSET_FLOOR[i].len);
+
+    g_ceil = tigrLoadImageMem(ASSET_CEIL.png, ASSET_CEIL.len);
+    g_door = tigrLoadImageMem(ASSET_DOOR.png, ASSET_DOOR.len);
+
+    for (int i = 0; i < MOB_TYPES_N && i < ASSET_MOB_N && i < 32; ++i)
+        g_mob[i] = tigrLoadImageMem(ASSET_MOB[i].png, ASSET_MOB[i].len);
+    for (int i = 0; i < ITEMS_N && i < ASSET_ITEM_N && i < 64; ++i)
+        g_item[i] = tigrLoadImageMem(ASSET_ITEM[i].png, ASSET_ITEM[i].len);
 }
 
 /* Bounds-checked single-pixel write. */
@@ -261,6 +69,11 @@ static inline int light_mul(float d) {
     float f = 1.0f - d * 0.06f;
     if (f < 0.12f) f = 0.12f;
     return (int)(f * 256.0f);
+}
+
+/* Sample a 32x32 tile (wrapping) without lighting. */
+static inline TPixel tile_at(Tigr *t, int tx, int ty) {
+    return t->pix[(ty & TILE_MASK) * t->w + (tx & TILE_MASK)];
 }
 
 /* ---- Main draw ---------------------------------------------------------- */
@@ -296,21 +109,31 @@ void render3d_draw(Game *g, Tigr *s, int x0, int y0, int vw, int vh) {
         float step_x  = row_dist * 2.0f * planex * inv_vw;
         float step_y  = row_dist * 2.0f * planey * inv_vw;
 
-        uint8_t *tex = is_floor ? g_floor_tex : g_ceil_tex;
-        TPixel  *pal = is_floor ? g_floor_pal : g_ceil_pal;
-
         int lm = light_mul(row_dist);
+        int ceil_lm = (lm * CEIL_DIM) >> 8;
+        int use_lm = is_floor ? lm : ceil_lm;
+
         int sy = y0 + y;
         if ((unsigned)sy >= (unsigned)s->h) continue;
         TPixel *row = &s->pix[sy * s->w + x0];
 
         for (int x = 0; x < vw; ++x) {
-            int tx = (int)(TEX_SIZE * (floor_x - floorf(floor_x))) & TEX_MASK;
-            int ty = (int)(TEX_SIZE * (floor_y - floorf(floor_y))) & TEX_MASK;
-            TPixel c = pal[tex[ty * TEX_SIZE + tx] & 15];
-            row[x].r = (uint8_t)((c.r * lm) >> 8);
-            row[x].g = (uint8_t)((c.g * lm) >> 8);
-            row[x].b = (uint8_t)((c.b * lm) >> 8);
+            int cellx = (int)floorf(floor_x);
+            int celly = (int)floorf(floor_y);
+            int tx = (int)(TILE * (floor_x - cellx)) & TILE_MASK;
+            int ty = (int)(TILE * (floor_y - celly)) & TILE_MASK;
+
+            Tigr *t;
+            if (is_floor) {
+                int idx = g_floor_n > 1 ? ((cellx + celly) & 1) : 0;
+                t = g_floor[idx];
+            } else {
+                t = g_ceil;
+            }
+            TPixel c = t->pix[ty * t->w + tx];
+            row[x].r = (uint8_t)((c.r * use_lm) >> 8);
+            row[x].g = (uint8_t)((c.g * use_lm) >> 8);
+            row[x].b = (uint8_t)((c.b * use_lm) >> 8);
             row[x].a = 255;
             floor_x += step_x;
             floor_y += step_y;
@@ -362,19 +185,17 @@ void render3d_draw(Game *g, Tigr *s, int x0, int y0, int vw, int vh) {
         int top = draw_start < 0 ? 0 : draw_start;
         int bot = draw_end   > vh ? vh : draw_end;
 
-        int tex_idx;
-        if (tile_kind == T_DOOR) tex_idx = 5;
-        else tex_idx = (int)(hash_cell(mapX, mapY) % 5u);
-        uint8_t *tex = g_wall_tex[tex_idx];
-        TPixel  *pal = g_wall_pal[tex_idx];
+        Tigr *tex;
+        if (tile_kind == T_DOOR) tex = g_door;
+        else tex = g_wall[g_wall_n ? (hash_cell(mapX, mapY) % (uint32_t)g_wall_n) : 0];
 
         float wall_hit = (side == 0) ? (py + perp * rdy)
                                       : (px + perp * rdx);
         wall_hit -= floorf(wall_hit);
-        int tx = (int)(wall_hit * (float)TEX_SIZE);
-        if (side == 0 && rdx > 0) tx = TEX_SIZE - tx - 1;
-        if (side == 1 && rdy < 0) tx = TEX_SIZE - tx - 1;
-        tx &= TEX_MASK;
+        int tx = (int)(wall_hit * (float)TILE);
+        if (side == 0 && rdx > 0) tx = TILE - tx - 1;
+        if (side == 1 && rdy < 0) tx = TILE - tx - 1;
+        tx &= TILE_MASK;
 
         int lm = light_mul(perp);
         if (side == 1) lm = (lm * 180) >> 8;   /* Y-side darker (Wolf3D style) */
@@ -384,9 +205,9 @@ void render3d_draw(Game *g, Tigr *s, int x0, int y0, int vw, int vh) {
 
         for (int yy = top; yy < bot; ++yy) {
             int d  = yy * 256 - vh * 128 + line_h * 128;
-            int ty = ((d * TEX_SIZE) / line_h) >> 8;
-            ty &= TEX_MASK;
-            TPixel c = pal[tex[ty * TEX_SIZE + tx] & 15];
+            int ty = ((d * TILE) / line_h) >> 8;
+            ty &= TILE_MASK;
+            TPixel c = tex->pix[ty * tex->w + tx];
             int sy = y0 + yy;
             if ((unsigned)sy >= (unsigned)s->h) continue;
             TPixel *out = &s->pix[sy * s->w + sx];
@@ -397,7 +218,7 @@ void render3d_draw(Game *g, Tigr *s, int x0, int y0, int vw, int vh) {
         }
     }
 
-    /* --- Sprites: mobs + items, depth-sorted, z-buffered. --- */
+    /* --- Sprites: mobs + items, depth-sorted, z-buffered billboards. --- */
     typedef struct { int idx, is_mob; float dist; } SR;
     static SR list[MAX_MOBS + MAX_FLOOR_ITEMS];
     int n = 0;
@@ -433,16 +254,19 @@ void render3d_draw(Game *g, Tigr *s, int x0, int y0, int vw, int vh) {
     for (int si = 0; si < n; ++si) {
         SR sr = list[si];
         float spr_x, spr_y;
+        Tigr *spr;
         char glyph;
         TPixel base;
         if (sr.is_mob) {
             Mob *m = &g->mobs[sr.idx];
             spr_x = m->pos.x + 0.5f; spr_y = m->pos.y + 0.5f;
+            spr   = (m->kind < MOB_TYPES_N) ? g_mob[m->kind] : NULL;
             glyph = MOB_TYPES[m->kind].glyph;
             base  = MOB_TYPES[m->kind].color;
         } else {
             FloorItem *f = &g->floor[sr.idx];
             spr_x = f->pos.x + 0.5f; spr_y = f->pos.y + 0.5f;
+            spr   = (f->def < 64) ? g_item[f->def] : NULL;
             glyph = ITEMS[f->def].glyph;
             base  = ITEMS[f->def].color;
         }
@@ -452,60 +276,57 @@ void render3d_draw(Game *g, Tigr *s, int x0, int y0, int vw, int vh) {
         if (ty_c <= 0.2f) continue;
 
         int screen_x = (int)((vw / 2) * (1.0f + tx_c / ty_c));
-        int spr_h = (int)((float)vh / ty_c);
-        if (spr_h < 6) spr_h = 6;
-        if (spr_h > vh * MAX_LINE_MUL) spr_h = vh * MAX_LINE_MUL;
+        int spr_dim = (int)((float)vh / ty_c);   /* square tile -> w == h */
+        if (spr_dim < 6) spr_dim = 6;
+        if (spr_dim > vh * MAX_LINE_MUL) spr_dim = vh * MAX_LINE_MUL;
 
         int lm = light_mul(ty_c);
-        TPixel tinted = {
-            (uint8_t)((base.r * lm) >> 8),
-            (uint8_t)((base.g * lm) >> 8),
-            (uint8_t)((base.b * lm) >> 8), 255
-        };
-        TPixel outline = {
-            (uint8_t)(tinted.r / 3),
-            (uint8_t)(tinted.g / 3),
-            (uint8_t)(tinted.b / 3), 255
-        };
 
-        int top, bot, w;
-        if (sr.is_mob) {
-            int h = (spr_h * 3) / 4;          /* slightly shorter than wall */
-            int floor_y2 = (vh + spr_h) / 2;
-            bot = floor_y2;
-            top = bot - h;
-            w   = h / 2;
-        } else {
-            int item_h = spr_h / 4;
-            if (item_h < 3) item_h = 3;
-            bot = (vh + spr_h) / 2;
-            top = bot - item_h;
-            w   = item_h * 2;
-        }
-        int left  = screen_x - w / 2;
-        int right = screen_x + w / 2;
+        /* Vertical span: centered on the horizon like the walls. */
+        int top = (vh - spr_dim) / 2;
+        int left = screen_x - spr_dim / 2;
         int top_c = top < 0 ? 0 : top;
-        int bot_c = bot > vh ? vh : bot;
+        int bot_c = (top + spr_dim) > vh ? vh : (top + spr_dim);
 
-        for (int cx = left; cx < right; ++cx) {
-            if (cx < 0 || cx >= vw) continue;
-            if (ty_c >= zbuf[cx]) continue;
-            int is_edge_x = (cx == left || cx == right - 1);
-            for (int cy = top_c; cy < bot_c; ++cy) {
-                int is_edge_y = (cy == top_c || cy == bot_c - 1);
-                TPixel pc = (is_edge_x || is_edge_y) ? outline : tinted;
-                put_px(s, x0 + cx, y0 + cy, pc);
+        if (spr) {
+            int tw = spr->w, th = spr->h;
+            for (int cx = left; cx < left + spr_dim; ++cx) {
+                if (cx < 0 || cx >= vw) continue;
+                if (ty_c >= zbuf[cx]) continue;
+                int u = (cx - left) * tw / spr_dim;
+                if (u < 0) u = 0; else if (u >= tw) u = tw - 1;
+                for (int cy = top_c; cy < bot_c; ++cy) {
+                    int v = (cy - top) * th / spr_dim;
+                    if (v < 0) v = 0; else if (v >= th) v = th - 1;
+                    TPixel c = spr->pix[v * spr->w + u];
+                    if (c.a < 128) continue;
+                    TPixel pc = {
+                        (uint8_t)((c.r * lm) >> 8),
+                        (uint8_t)((c.g * lm) >> 8),
+                        (uint8_t)((c.b * lm) >> 8), 255
+                    };
+                    put_px(s, x0 + cx, y0 + cy, pc);
+                }
             }
-        }
-
-        /* Stamp the glyph at sprite center if visible + large enough. */
-        if (spr_h >= 14 && screen_x >= 0 && screen_x < vw
-            && ty_c < zbuf[screen_x]) {
-            char buf[2] = { glyph, 0 };
-            int gx = x0 + screen_x - 4;
-            int gy = y0 + (top + bot) / 2 - 4;
-            TPixel gc = { 240, 240, 240, 255 };
-            tigrPrint(s, tfont, gx, gy, gc, "%s", buf);
+        } else {
+            /* Fallback: tinted rectangle + glyph (sprite failed to load). */
+            TPixel tinted = {
+                (uint8_t)((base.r * lm) >> 8),
+                (uint8_t)((base.g * lm) >> 8),
+                (uint8_t)((base.b * lm) >> 8), 255
+            };
+            for (int cx = left; cx < left + spr_dim; ++cx) {
+                if (cx < 0 || cx >= vw) continue;
+                if (ty_c >= zbuf[cx]) continue;
+                for (int cy = top_c; cy < bot_c; ++cy)
+                    put_px(s, x0 + cx, y0 + cy, tinted);
+            }
+            if (spr_dim >= 14 && screen_x >= 0 && screen_x < vw) {
+                char buf[2] = { glyph, 0 };
+                TPixel gc = { 240, 240, 240, 255 };
+                tigrPrint(s, tfont, x0 + screen_x - 4, y0 + vh / 2 - 4,
+                          gc, "%s", buf);
+            }
         }
     }
 }

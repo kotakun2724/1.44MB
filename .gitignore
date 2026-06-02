@@ -6,3 +6,7 @@ build/
 
 # runtime save (regenerated each play)
 score.dat
+
+# upstream tileset (CC0) - not redistributed; only the generated
+# src/assets_gen.c is committed. Drop the folder here to regenerate.
+Dungeon Crawl Stone Soup Full/
