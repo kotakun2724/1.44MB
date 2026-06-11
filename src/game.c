@@ -50,6 +50,11 @@ void game_new(Game *g, uint32_t seed) {
     g->player.depth   = 1;
     g->player.turn    = 0;
     g->player.facing  = (V2){ 0, -1 };  /* face north on entry */
+    g->player.defending = 0;
+    g->player.stun_turns = 0;
+    g->combat.target_idx = -1;
+    g->combat.phase = CP_PLAYER;
+    g->combat.n_adjacent = 0;
     g->state          = GS_PLAYING;
     g->wielded        = -1;
     g->worn           = -1;
@@ -107,8 +112,8 @@ void game_step(Game *g, int dx, int dy, int action) {
         int ny = g->player.pos.y + dy;
         Mob *target = mob_at(g, nx, ny);
         if (target) {
-            combat_attack_mob(g, target);
-            g->took_turn = 1;
+            msg_push(&g->log, "The %s blocks your path.",
+                     MOB_TYPES[target->kind].name);
         } else if (map_walkable(&g->map, nx, ny)) {
             g->player.pos.x = nx;
             g->player.pos.y = ny;
@@ -163,6 +168,8 @@ void game_step(Game *g, int dx, int dy, int action) {
                     msg_push(&g->log, "Out of memory. You crash.");
                 }
             }
+            if (g->state == GS_PLAYING)
+                combat_check_adjacent(g);
         }
     }
 }

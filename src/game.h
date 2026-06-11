@@ -71,6 +71,8 @@ typedef struct {
     int depth;
     int turn;
     int hunger;     /* 0=full; ticks up over time */
+    int defending;  /* 1 = next incoming hit is halved (+2 DEF) */
+    int stun_turns; /* skip next player combat action */
 } Player;
 
 #define HUNGER_HUNGRY    500
@@ -108,6 +110,7 @@ typedef struct {
     int last_seen_turn;  /* 0 = never seen player */
     V2  last_seen_pos;
     int alive;
+    int stun_turns; /* skip mob combat actions while > 0 */
 } Mob;
 
 #define MAX_MOBS 24
@@ -187,6 +190,8 @@ const char *msg_at(const MsgLog *log, int n);       /* 0 = newest */
 typedef enum {
     GS_TITLE,
     GS_PLAYING,
+    GS_COMBAT,
+    GS_COMBAT_ITEM,
     GS_INVENTORY,
     GS_HELP,
     GS_DEAD,
@@ -194,6 +199,29 @@ typedef enum {
     GS_HISCORE,
     GS_QUIT
 } GameState;
+
+/* ---- Turn-based combat --------------------------------------------------*/
+typedef enum {
+    CP_TARGET,   /* picking among adjacent foes */
+    CP_PLAYER,   /* waiting for player action */
+    CP_ENEMY     /* enemy resolving (auto-advance same frame) */
+} CombatPhase;
+
+typedef struct {
+    CombatPhase phase;
+    int target_idx;      /* index into g->mobs[], -1 if none */
+    int adjacent[8];     /* mob indices adjacent to player */
+    int n_adjacent;
+    int hud_sel;         /* highlighted action 0..3 for HUD */
+} CombatState;
+
+enum {
+    CA_NONE = 0,
+    CA_ATTACK,
+    CA_DEFEND,
+    CA_ITEM,
+    CA_FLEE
+};
 
 /* ---- High scores --------------------------------------------------------*/
 #define MAX_SCORES 8
@@ -238,6 +266,7 @@ typedef struct {
     int       inv_drop_mode; /* 1 = next a-p will drop, not use */
     ScoreList hiscores;    /* loaded at app start */
     int       run_recorded;/* 1 once we've inserted the current run */
+    CombatState combat;
 } Game;
 
 /* ---- Game flow ----------------------------------------------------------*/
@@ -249,6 +278,7 @@ void game_render(Game *g, Tigr *screen);
 void render3d_init(void);
 void render3d_draw(Game *g, Tigr *s, int x0, int y0, int vw, int vh);
 void render3d_minimap(Game *g, Tigr *s, int x0, int y0, int cell);
+Tigr *render3d_mob_sprite(int kind);
 
 /* Actions (non-movement). Movement uses dx/dy != 0.
  * ACT_TURN_L / ACT_TURN_R rotate the player's facing 90 degrees without
@@ -277,9 +307,12 @@ void mob_spawn_floor(Game *g);
 void mob_take_turns(Game *g);
 Mob *mob_at(Game *g, int x, int y);
 
-/* ---- Combat ------------------------------------------------------------*/
-void combat_attack_mob(Game *g, Mob *m);     /* player attacks mob       */
-void combat_mob_attacks(Game *g, Mob *m);    /* mob attacks player       */
+/* ---- Combat (turn-based, see src/combat.c) -----------------------------*/
+void combat_check_adjacent(Game *g);
+int  combat_input(Game *g, int c);
+void combat_render_hud(Game *g, Tigr *screen, int x0, int y0, int w, int h);
+Mob *combat_target(Game *g);
+void combat_mob_defeat(Game *g, Mob *m, int crit_msg);
 
 /* ---- Items / inventory --------------------------------------------------*/
 void item_init_knowledge(Game *g);
@@ -288,7 +321,9 @@ void item_pickup_under(Game *g);              /* auto-pickup on walk-over */
 FloorItem *item_at(Game *g, int x, int y);
 int  inv_first_empty(const Game *g);
 void inv_use(Game *g, int slot);
+void inv_use_in_combat(Game *g, int slot);
 void inv_drop(Game *g, int slot);
+void combat_item_turn(Game *g);
 const char *item_display(const Game *g, int def_index, char *buf, int buf_n);
 int  player_total_atk(const Game *g);
 int  player_total_def(const Game *g);

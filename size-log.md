@@ -15,13 +15,14 @@ Track binary size at each checkpoint. Budget: 1,474,560 bytes (1.44MB floppy).
 | 9. polish (README + screenshots + UI spacing) | 70,632 | ~134,000 | 33,280 | +512B for proper inventory/help line spacing.
 | 10. 3D renderer (raycaster + procedural textures) | 70,696 | 178,176 | 36,864 | +64B Mac / +44KB Win raw / **+3.5KB UPX**. Procedural 64x64 wall/floor/ceiling textures (no shipped texture bytes), DDA wall casting, perspective-correct floor mapping, depth-buffered sprites, minimap. Input updated for first-person grid+turn-based (W/S forward/back, A/D strafe, Q/E turn 90 deg). Existing game state, FOV, mob AI, items, hunger, bosses untouched.
 | 11. DCSS tiles (real textures + sprites) | 120,232 | 209,408 | 72,192 | +50KB Mac / +31KB Win raw / **+35KB UPX**. Replaced procedural textures with 44 embedded Dungeon Crawl Stone Soup tiles (CC0): 6 walls, 2 floors, 1 ceiling, 1 door, 14 mob sprites, 20 item sprites. Tiles normalized to non-interlaced 8-bit RGBA PNG and decoded once via `tigrLoadImageMem`. Mobs/items now alpha-tested billboard sprites. PNG payload 38,874 bytes (already compressed, so UPX delta tracks it ~1:1).
+| 12. turn-based combat + HUD | 120,360 | 215,552 | 76,800 | +4.6KB UPX. Dedicated GS_COMBAT mode on foe adjacency; attack/defend/item/flee with crit/miss/stun; target pick among adjacent foes; 4 DCSS gui HUD icons embedded. Bump combat removed.
 
 ## Budget summary
 
 - Target floppy size: **1,474,560 bytes** (1.44 MB, 3.5" HD floppy)
-- Final submission `.exe`: **72,192 bytes** (70 KB)
-- Headroom: **1,402,368 bytes** unused (95.1 % of the disk)
-- Compression: raw ~209 KB -> UPX 72 KB (~2.9x ratio, --best --lzma)
+- Final submission `.exe`: **76,800 bytes** (75 KB)
+- Headroom: **1,397,760 bytes** unused (94.8 % of the disk)
+- Compression: raw ~216 KB -> UPX 77 KB (~2.8x ratio, --best --lzma)
 
 ## DCSS tiles cost breakdown (stage 11 - stage 10)
 

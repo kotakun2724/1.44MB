@@ -153,7 +153,7 @@ void item_pickup_under(Game *g) {
 }
 
 /* ---- Effects ------------------------------------------------------------*/
-static void apply_effect(Game *g, int def) {
+static void apply_effect_to(Game *g, int def, Mob *combat_target) {
     const ItemDef *d = &ITEMS[def];
     char buf[64];
     item_display(g, def, buf, sizeof buf);
@@ -239,25 +239,54 @@ static void apply_effect(Game *g, int def) {
             break;
         }
         case EFF_LIGHTNING: {
-            int hits = 0;
-            for (int i = 0; i < g->n_mobs; ++i) {
-                Mob *m = &g->mobs[i];
-                if (!m->alive) continue;
-                if (!g->map.visible[m->pos.y][m->pos.x]) continue;
+            if (combat_target && combat_target->alive) {
                 int dmg = 8 + rng_range(&g->rng, 0, 4);
-                m->hp -= dmg;
-                hits++;
-                if (m->hp <= 0) {
-                    m->alive = 0;
-                    g->player.xp += MOB_TYPES[m->kind].xp;
+                combat_target->hp -= dmg;
+                msg_push(&g->log, "Lightning hits the %s for %d!",
+                         MOB_TYPES[combat_target->kind].name, dmg);
+                if (combat_target->hp <= 0)
+                    combat_mob_defeat(g, combat_target, 0);
+            } else {
+                int hits = 0;
+                for (int i = 0; i < g->n_mobs; ++i) {
+                    Mob *m = &g->mobs[i];
+                    if (!m->alive) continue;
+                    if (!g->map.visible[m->pos.y][m->pos.x]) continue;
+                    int dmg = 8 + rng_range(&g->rng, 0, 4);
+                    m->hp -= dmg;
+                    hits++;
+                    if (m->hp <= 0)
+                        combat_mob_defeat(g, m, 0);
                 }
+                msg_push(&g->log, "A bolt strikes %d enem%s.",
+                         hits, hits == 1 ? "y" : "ies");
             }
-            msg_push(&g->log, "A bolt strikes %d enem%s.", hits, hits == 1 ? "y" : "ies");
             break;
         }
         default: break;
     }
     g->know.identified[def] = 1;
+}
+
+static void apply_effect(Game *g, int def) {
+    apply_effect_to(g, def, NULL);
+}
+
+void inv_use_in_combat(Game *g, int slot) {
+    if (slot < 0 || slot >= INV_SIZE) return;
+    int def = g->inv[slot].def;
+    if (def < 0) return;
+    const ItemDef *d = &ITEMS[def];
+    if (d->kind != IT_POTION && d->kind != IT_SCROLL && d->kind != IT_FOOD) {
+        msg_push(&g->log, "You can't use that in combat.");
+        return;
+    }
+    Mob *target = combat_target(g);
+    apply_effect_to(g, def, target);
+    g->inv[slot].def = -1;
+    if (g->wielded == slot) g->wielded = -1;
+    if (g->worn == slot) g->worn = -1;
+    combat_item_turn(g);
 }
 
 void inv_use(Game *g, int slot) {

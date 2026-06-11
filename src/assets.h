@@ -15,5 +15,7 @@ extern const EmbeddedPng ASSET_MOB[];
 extern const int        ASSET_MOB_N;
 extern const EmbeddedPng ASSET_ITEM[];
 extern const int        ASSET_ITEM_N;
+extern const EmbeddedPng ASSET_HUD[];
+extern const int        ASSET_HUD_N;
 
 #endif /* ASSETS_H */

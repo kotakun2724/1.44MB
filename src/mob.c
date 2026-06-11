@@ -88,74 +88,13 @@ void mob_spawn_floor(Game *g) {
     }
 }
 
-/* ---- Combat -------------------------------------------------------------*/
-static int sgn(int v) { return v < 0 ? -1 : (v > 0 ? 1 : 0); }
-
-void combat_attack_mob(Game *g, Mob *m) {
-    const MobType *t = &MOB_TYPES[m->kind];
-    int dmg = player_total_atk(g) - t->def + rng_range(&g->rng, -1, 1);
-    int crit = rng_chance(&g->rng, 8);
-    if (crit) dmg = dmg * 2 + 1;
-    if (dmg < 1) dmg = 1;
-    m->hp -= dmg;
-    if (m->hp <= 0) {
-        m->alive = 0;
-        g->player.xp += t->xp;
-        if (t->boss) {
-            msg_push(&g->log, "** %s collapses into clean bytes! **", t->name);
-        } else {
-            msg_push(&g->log, crit ? "CRIT! You shatter the %s (+%d xp)."
-                                    : "You defeat the %s (+%d xp).",
-                     t->name, t->xp);
-        }
-        /* Level up at 10*level XP. */
-        int need = 10 * g->player.level;
-        while (g->player.xp >= need) {
-            g->player.xp -= need;
-            g->player.level++;
-            g->player.hp_max += 4;
-            g->player.hp = g->player.hp_max;
-            g->player.atk += 1;
-            if ((g->player.level % 3) == 0) g->player.def += 1;
-            msg_push(&g->log, "** Recompiled to Lv %d! **", g->player.level);
-            need = 10 * g->player.level;
-        }
-        if (t->boss && g->player.depth >= FINAL_DEPTH) {
-            g->state = GS_WIN;
-            msg_push(&g->log, "** The disk is whole. You win. **");
-        }
-    } else {
-        msg_push(&g->log, crit ? "CRIT! You hit the %s for %d."
-                                : "You hit the %s for %d.",
-                 t->name, dmg);
-    }
-}
-
-void combat_mob_attacks(Game *g, Mob *m) {
-    const MobType *t = &MOB_TYPES[m->kind];
-    int dmg = t->atk - player_total_def(g) + rng_range(&g->rng, -1, 1);
-    int crit = rng_chance(&g->rng, 5);
-    if (crit) dmg = dmg * 2;
-    if (dmg < 1) dmg = 1;
-    g->player.hp -= dmg;
-    msg_push(&g->log, crit ? "The %s crit-strikes you for %d!"
-                            : "The %s hits you for %d.",
-             t->name, dmg);
-    if (g->player.hp <= 0) {
-        g->player.hp = 0;
-        g->state = GS_DEAD;
-        msg_push(&g->log, "Segmentation fault. You are deallocated.");
-    }
-}
-
 /* ---- AI -----------------------------------------------------------------*/
+static int sgn(int v) { return v < 0 ? -1 : (v > 0 ? 1 : 0); }
 static int try_step(Game *g, Mob *m, int dx, int dy) {
     int nx = m->pos.x + dx, ny = m->pos.y + dy;
     if (!map_walkable(&g->map, nx, ny)) return 0;
-    if (nx == g->player.pos.x && ny == g->player.pos.y) {
-        combat_mob_attacks(g, m);
-        return 1;
-    }
+    if (nx == g->player.pos.x && ny == g->player.pos.y)
+        return 1;   /* blocked; combat starts via combat_check_adjacent */
     if (mob_at(g, nx, ny)) return 0;
     m->pos.x = nx; m->pos.y = ny;
     return 1;
