@@ -4,8 +4,8 @@ A **first-person 3D dungeon-crawl roguelike** that fits on a single 3.5-inch
 HD floppy disk. Doom-style textured walls, grid-locked movement,
 turn-based combat -- in the spirit of *Wizardry*, *Eye of the Beholder*,
 and *Legend of Grimrock*. The whole game (executable, font, textures,
-data, everything) is a **72,192-byte standalone Windows executable** --
-about 4.9 % of the 1,474,560-byte floppy budget.
+data, everything) is a **76,800-byte standalone Windows executable** --
+about 5.2 % of the 1,474,560-byte floppy budget.
 
 Built for the [1.44MB GAME_DEV CONTEST](https://2pgarcade.com/contest-144mb.html).
 
@@ -37,7 +37,8 @@ in the tradition of *Wolfenstein 3D* and *Doom*, played in the tradition of
 - 20-item table: weapons, armor, patches (potions), scrolls, food
 - Unidentified patches and scrolls get random pseudo-names (`red patch`,
   `ALPHA.exe`) -- the mapping is reshuffled every run
-- Bump-to-attack combat with critical strikes and a level-up curve
+- **Dedicated turn-based combat** when adjacent to foes: Attack, Defend,
+  Item, Flee with a DCSS-icon HUD; crits, misses, stuns, and retargeting
 - Hunger system thematically branded as **memory pressure**: ticks up every
   turn, stops regen at *Hungry*, drains HP at *Starving*
 - Permadeath, high-score table persisted in a tiny `score.dat` (~232 bytes)
@@ -67,6 +68,20 @@ the four cardinal directions; `Q` and `E` rotate the camera 90 degrees in
 place and do not cost a turn, so you can survey the room freely.
 
 In inventory: `a-p` use/equip an item, `D` (capital) then `<letter>` drop, `i`/`ESC` close.
+
+### Combat (auto-starts when adjacent to a foe)
+
+```
+1               attack (crit / miss / stun)
+2               defend (halve next hit, +2 DEF)
+3               use item (consumables only)
+4               flee (chance to break away)
+T               retarget when multiple foes are adjacent
+1-9             pick target when ambushed
+```
+
+During combat the bottom panel becomes a **combat HUD** with enemy and
+player HP bars plus DCSS skill icons for each action.
 
 ![inventory](screenshots/inventory.png)
 ![help](screenshots/help.png)
@@ -105,12 +120,11 @@ of a 1.44 MB 3.5-inch HD floppy. The actual numbers from this build:
 |---------------------------------------|----------:|-------------:|
 | Mac build (`clang -Os -flto`)         |   117 KB |          8 % |
 | Win build (`mingw -Os -flto -s`)      |   204 KB |         14 % |
-| Win build + `upx --best --lzma`       |  **70 KB** |    **4.9 %** |
+| Win build + `upx --best --lzma`       |  **75 KB** |    **5.2 %** |
 
-The 44 Dungeon Crawl Stone Soup tiles add only ~39 KB of (already
-DEFLATE-compressed) PNG data, embedded directly in the binary and decoded
-once at startup -- no external files ship with the game. We still leave
-**1,402,368 bytes** unused on the floppy.
+Embedded DCSS tiles and combat HUD icons ship as compressed PNG bytes in
+the binary (decoded once at startup). We still leave **1,397,760 bytes**
+unused on the floppy.
 
 The full per-stage size log is in [`size-log.md`](size-log.md).
 
@@ -126,6 +140,8 @@ Pure C99, statically linked, **no runtime dependencies**:
 - [src/score.c](src/score.c) -- binary high-score persistence (`score.dat`)
 - [src/ui.c](src/ui.c) -- screens (title, help, hiscore, inventory) +
   3D viewport / minimap / status panel composition
+- [src/combat.c](src/combat.c) -- turn-based combat: adjacent detection,
+  target selection, attack/defend/flee, crit/miss/stun, combat HUD
 - [src/render3d.c](src/render3d.c) -- Wolfenstein-style raycaster: DCSS-tiled
   wall / floor / ceiling sampling, DDA wall casting, perspective-correct
   floor mapping, distance fade, depth-buffered sprite blits, minimap

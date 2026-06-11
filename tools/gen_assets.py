@@ -53,6 +53,13 @@ MOBS = [
     "monster/dragons/dragon.png",           # Kernel Panic (boss)
     "monster/undead/ancient_lich_new.png",  # Master Boot Record (boss)
 ]
+HUD_ICONS = [
+    "gui/skills/fighting.png",           # attack
+    "gui/skills/shields.png",            # defend
+    "gui/tabs/tab_label_item_sword.png", # item
+    "gui/skills/dodging.png",            # flee
+]
+
 ITEMS = [
     "item/weapon/dagger_new.png",              # rusty dagger
     "item/weapon/short_sword_1_new.png",       # short sword
@@ -119,6 +126,7 @@ def main():
     door_name = add("door", DOOR)
     mob_names = [add("mob", p) for p in MOBS]
     item_names = [add("item", p) for p in ITEMS]
+    hud_names = [add("hud", p) for p in HUD_ICONS]
 
     total = sum(len(d) for _, d in blobs)
 
@@ -137,7 +145,9 @@ def main():
             "extern const EmbeddedPng ASSET_MOB[];\n"
             "extern const int        ASSET_MOB_N;\n"
             "extern const EmbeddedPng ASSET_ITEM[];\n"
-            "extern const int        ASSET_ITEM_N;\n\n"
+            "extern const int        ASSET_ITEM_N;\n"
+            "extern const EmbeddedPng ASSET_HUD[];\n"
+            "extern const int        ASSET_HUD_N;\n\n"
             "#endif /* ASSETS_H */\n")
 
     with open(OUT_C, "w") as fc:
@@ -169,6 +179,8 @@ def main():
         fc.write("const int ASSET_MOB_N = %d;\n" % len(mob_names))
         table("ASSET_ITEM", item_names)
         fc.write("const int ASSET_ITEM_N = %d;\n" % len(item_names))
+        table("ASSET_HUD", hud_names)
+        fc.write("const int ASSET_HUD_N = %d;\n" % len(hud_names))
 
     print("wrote %s (%d blobs, %d bytes of PNG data)"
           % (os.path.relpath(OUT_C, REPO), len(blobs), total))

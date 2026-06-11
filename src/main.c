@@ -145,6 +145,18 @@ int main(int argc, char *argv[]) {
             } else if (c == 'q' || c == 'Q' || esc_pressed) {
                 game.state = GS_QUIT;
             }
+        } else if (game.state == GS_COMBAT) {
+            combat_input(&game, c);
+            if (game.state == GS_DEAD) record_run(&game, 1);
+            else if (game.state == GS_WIN) record_run(&game, 2);
+        } else if (game.state == GS_COMBAT_ITEM) {
+            if (c == '3' || esc_pressed) {
+                game.state = GS_COMBAT;
+            } else if (c >= 'a' && c < 'a' + INV_SIZE) {
+                inv_use_in_combat(&game, c - 'a');
+                if (game.state == GS_DEAD) record_run(&game, 1);
+                else if (game.state == GS_WIN) record_run(&game, 2);
+            }
         } else if (game.state == GS_PLAYING) {
             if (c == 'i' || c == 'I') {
                 game.state = GS_INVENTORY;

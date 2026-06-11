@@ -58,6 +58,12 @@ void render3d_init(void) {
         g_item[i] = tigrLoadImageMem(ASSET_ITEM[i].png, ASSET_ITEM[i].len);
 }
 
+Tigr *render3d_mob_sprite(int kind) {
+    render3d_init();
+    if (kind < 0 || kind >= 32) return NULL;
+    return g_mob[kind];
+}
+
 /* Bounds-checked single-pixel write. */
 static inline void put_px(Tigr *s, int x, int y, TPixel c) {
     if ((unsigned)x < (unsigned)s->w && (unsigned)y < (unsigned)s->h)

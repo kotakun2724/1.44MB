@@ -148,8 +148,14 @@ static void render_help(Tigr *screen) {
         "  k kraken   N null pointer",
         "  D / K / M  bosses on floors 5 / 10 / 15",
         "",
-        "Walk into a foe to attack. The minimap (bottom right)",
-        "shows the layout you have explored so far."
+        "COMBAT (auto-starts when adjacent to a foe)",
+        "  1  Attack   2  Defend   3  Item   4  Flee",
+        "  T            retarget (multiple foes)",
+        "  1-9          pick target when ambushed",
+        "  a-p          use consumable (in item menu)",
+        "",
+        "Crits, misses, and stuns can turn the fight.",
+        "The minimap (bottom right) shows explored layout."
     };
     int n = (int)(sizeof(lines) / sizeof(lines[0]));
     int line_h = 11;
@@ -246,6 +252,31 @@ static void render_inventory(Game *g, Tigr *screen, int drop_mode) {
     puts_at(screen, 1, ROWS - 2, C_TEXT, buf);
 }
 
+/* ---- Combat item picker (consumables only) ------------------------------*/
+static void render_combat_items(Game *g, Tigr *screen) {
+    tigrFillRect(screen, 0, 200, SCREEN_W, 80, tigrRGBA(8, 8, 16, 220));
+    puts_at(screen, 2, 26, C_ACCENT, "==== COMBAT ITEMS (a-p) ====");
+    puts_at(screen, 2, 28, C_DIM, "patches / scrolls / food only   3 or ESC back");
+    char buf[120];
+    int y = 30 * CELL_H;
+    int any = 0;
+    for (int i = 0; i < INV_SIZE; ++i) {
+        int def = g->inv[i].def;
+        if (def < 0) continue;
+        const ItemDef *d = &ITEMS[def];
+        if (d->kind != IT_POTION && d->kind != IT_SCROLL && d->kind != IT_FOOD)
+            continue;
+        any = 1;
+        char nm[64];
+        item_display(g, def, nm, sizeof nm);
+        snprintf(buf, sizeof buf, "%c) %c %-24s  %s",
+                 'a' + i, d->glyph, nm, d->desc ? d->desc : "");
+        puts_px(screen, 2, y, d->color, buf);
+        y += 11;
+    }
+    if (!any) puts_px(screen, 2, y, C_DIM, "(no usable items)");
+}
+
 /* ---- Main render --------------------------------------------------------*/
 void game_render(Game *g, Tigr *screen) {
     switch (g->state) {
@@ -255,6 +286,8 @@ void game_render(Game *g, Tigr *screen) {
         case GS_INVENTORY: render_inventory(g, screen, g->inv_drop_mode); return;
         default: break;
     }
+
+    int in_combat = (g->state == GS_COMBAT || g->state == GS_COMBAT_ITEM);
 
     tigrClear(screen, C_BG);
 
@@ -281,49 +314,55 @@ void game_render(Game *g, Tigr *screen) {
     /* Border between 3D view and bottom panel. */
     for (int x = 0; x < SCREEN_W; ++x) tigrPlot(screen, x, V3D_H, C_BORDER);
 
-    /* Message log (newest at top). */
-    for (int i = 0; i < LOG_ROWS; ++i) {
-        TPixel c = (i == 0) ? C_TEXT : C_DIM;
-        puts_px(screen, LEFT_PAD / CELL_W, LOG_PX_Y + i * LOG_LINE_H, c,
-                msg_at(&g->log, i));
-    }
-
-    /* Status line + tagline. */
-    char buf[128];
-    int need = 10 * g->player.level;
-    const char *hunger_tag =
-        g->player.hunger >= HUNGER_STARVING ? " STARVING" :
-        g->player.hunger >= HUNGER_HUNGRY   ? " Hungry"   : "";
-    int is_boss = (g->player.depth == 5 || g->player.depth == 10
-                   || g->player.depth == FINAL_DEPTH);
-    snprintf(buf, sizeof buf,
-             "Sec %02d%s HP %d/%d ATK %d DEF %d Lv %d XP %d/%d T %d%s",
-             g->player.depth, is_boss ? "!" : " ",
-             g->player.hp, g->player.hp_max,
-             player_total_atk(g), player_total_def(g),
-             g->player.level,
-             g->player.xp, need,
-             g->player.turn,
-             hunger_tag);
-    TPixel hp_col = (g->player.hp * 3 < g->player.hp_max)
-        ? tigrRGB(255, 100, 100) : C_TEXT;
-    puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y, hp_col, buf);
-
-    if (g->state == GS_DEAD) {
-        puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H,
-                tigrRGB(255, 80, 80),
-                "*** SEGMENTATION FAULT - press any key ***");
-    } else if (g->state == GS_WIN) {
-        puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H,
-                tigrRGB(120, 255, 120),
-                "*** DATA RECOVERED - press any key ***");
-    } else if (is_boss) {
-        puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H,
-                tigrRGB(255, 180, 80),
-                "!! BOSS SECTOR - a corruption awaits !!");
+    if (in_combat) {
+        combat_render_hud(g, screen, 0, PANEL_TOP, SCREEN_W, SCREEN_H - PANEL_TOP);
+        if (g->state == GS_COMBAT_ITEM)
+            render_combat_items(g, screen);
     } else {
-        puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H, C_DIM,
-                "WASD move  QE turn  . wait  > descend  i inv  ? help");
+        /* Message log (newest at top). */
+        for (int i = 0; i < LOG_ROWS; ++i) {
+            TPixel c = (i == 0) ? C_TEXT : C_DIM;
+            puts_px(screen, LEFT_PAD / CELL_W, LOG_PX_Y + i * LOG_LINE_H, c,
+                    msg_at(&g->log, i));
+        }
+
+        /* Status line + tagline. */
+        char buf[128];
+        int need = 10 * g->player.level;
+        const char *hunger_tag =
+            g->player.hunger >= HUNGER_STARVING ? " STARVING" :
+            g->player.hunger >= HUNGER_HUNGRY   ? " Hungry"   : "";
+        int is_boss = (g->player.depth == 5 || g->player.depth == 10
+                       || g->player.depth == FINAL_DEPTH);
+        snprintf(buf, sizeof buf,
+                 "Sec %02d%s HP %d/%d ATK %d DEF %d Lv %d XP %d/%d T %d%s",
+                 g->player.depth, is_boss ? "!" : " ",
+                 g->player.hp, g->player.hp_max,
+                 player_total_atk(g), player_total_def(g),
+                 g->player.level,
+                 g->player.xp, need,
+                 g->player.turn,
+                 hunger_tag);
+        TPixel hp_col = (g->player.hp * 3 < g->player.hp_max)
+            ? tigrRGB(255, 100, 100) : C_TEXT;
+        puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y, hp_col, buf);
+
+        if (g->state == GS_DEAD) {
+            puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H,
+                    tigrRGB(255, 80, 80),
+                    "*** SEGMENTATION FAULT - press any key ***");
+        } else if (g->state == GS_WIN) {
+            puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H,
+                    tigrRGB(120, 255, 120),
+                    "*** DATA RECOVERED - press any key ***");
+        } else if (is_boss) {
+            puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H,
+                    tigrRGB(255, 180, 80),
+                    "!! BOSS SECTOR - a corruption awaits !!");
+        } else {
+            puts_px(screen, LEFT_PAD / CELL_W, STAT_PX_Y + LOG_LINE_H, C_DIM,
+                    "WASD move  QE turn  . wait  > descend  i inv  ? help");
+        }
     }
 
     /* Minimap (top-right of bottom panel). */
