@@ -39,6 +39,9 @@ in the tradition of *Wolfenstein 3D* and *Doom*, played in the tradition of
   `ALPHA.exe`) -- the mapping is reshuffled every run
 - **Dedicated turn-based combat** when adjacent to foes: Attack, Defend,
   Item, Flee with a DCSS-icon HUD; crits, misses, stuns, and retargeting
+- **Unlockable attack skills** (Overclock, Quick Ping, Buffer Overflow,
+  Defrag Sweep) plus a **roguelike level-up screen** that offers 3 upgrades
+  to pick from (stats, passives, or new skills)
 - Hunger system thematically branded as **memory pressure**: ticks up every
   turn, stops regen at *Hungry*, drains HP at *Starving*
 - Permadeath, high-score table persisted in a tiny `score.dat` (~232 bytes)
@@ -54,8 +57,8 @@ W               step forward (1 tile, facing direction)
 S               step backward (1 tile)
 A               strafe left
 D               strafe right
-Q               turn 90 deg left   (does NOT consume a turn)
-E               turn 90 deg right  (does NOT consume a turn)
+Q               turn 45 deg left   (does NOT consume a turn)
+E               turn 45 deg right  (does NOT consume a turn)
 .   space       wait one turn
 >               descend stairs
 i               open inventory
@@ -63,22 +66,28 @@ i               open inventory
 ESC             abandon run (returns to title)
 ```
 
-Walking into an enemy attacks it (bump-to-attack). Facing is restricted to
-the four cardinal directions; `Q` and `E` rotate the camera 90 degrees in
-place and do not cost a turn, so you can survey the room freely.
+Adjacent foes trigger turn-based combat automatically. Facing uses eight
+directions (cardinal and diagonal); `Q` and `E` rotate the camera 45
+degrees in place and do not cost a turn, so you can survey the room freely.
 
 In inventory: `a-p` use/equip an item, `D` (capital) then `<letter>` drop, `i`/`ESC` close.
 
 ### Combat (auto-starts when adjacent to a foe)
 
 ```
-1               attack (crit / miss / stun)
+1               attack (opens skill menu once extras are unlocked)
 2               defend (halve next hit, +2 DEF)
 3               use item (consumables only)
 4               flee (chance to break away)
 T               retarget when multiple foes are adjacent
 1-9             pick target when ambushed
+a-e             pick attack skill (in attack menu)
+1 / ESC         back from attack or item menu
 ```
+
+On level-up you automatically gain +2 max HP (full heal) and are shown
+**3 random upgrades** -- press `1`, `2`, or `3` to pick one (extra ATK,
+DEF, crit chance, kill-heal, flee bonus, or a new attack skill).
 
 During combat the bottom panel becomes a **combat HUD** with enemy and
 player HP bars plus DCSS skill icons for each action.
@@ -141,7 +150,9 @@ Pure C99, statically linked, **no runtime dependencies**:
 - [src/ui.c](src/ui.c) -- screens (title, help, hiscore, inventory) +
   3D viewport / minimap / status panel composition
 - [src/combat.c](src/combat.c) -- turn-based combat: adjacent detection,
-  target selection, attack/defend/flee, crit/miss/stun, combat HUD
+  target selection, attack skills/defend/flee, crit/miss/stun, combat HUD
+- [src/levelup.c](src/levelup.c) -- roguelike level-up: 3 random upgrades
+  (stats, passives, attack skill unlocks)
 - [src/render3d.c](src/render3d.c) -- Wolfenstein-style raycaster: DCSS-tiled
   wall / floor / ceiling sampling, DDA wall casting, perspective-correct
   floor mapping, distance fade, depth-buffered sprite blits, minimap

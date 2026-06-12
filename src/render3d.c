@@ -93,6 +93,8 @@ void render3d_draw(Game *g, Tigr *s, int x0, int y0, int vw, int vh) {
     if (fx == 0 && fy == 0) { fy = -1; }
     float dirx   = (float)fx;
     float diry   = (float)fy;
+    float dlen   = sqrtf(dirx * dirx + diry * diry);
+    if (dlen > 0.0001f) { dirx /= dlen; diry /= dlen; }
     float planex = -diry * FOV_PLANE;
     float planey =  dirx * FOV_PLANE;
 

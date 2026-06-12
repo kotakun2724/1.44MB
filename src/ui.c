@@ -123,8 +123,8 @@ static void render_help(Tigr *screen) {
         "  S              step backward",
         "  A              strafe left",
         "  D              strafe right",
-        "  Q              turn 90 deg left   (no turn consumed)",
-        "  E              turn 90 deg right  (no turn consumed)",
+        "  Q              turn 45 deg left   (no turn consumed)",
+        "  E              turn 45 deg right  (no turn consumed)",
         "  .  space       wait one turn",
         "",
         "ACTIONS",
@@ -152,8 +152,10 @@ static void render_help(Tigr *screen) {
         "  1  Attack   2  Defend   3  Item   4  Flee",
         "  T            retarget (multiple foes)",
         "  1-9          pick target when ambushed",
+        "  a-e          pick attack skill (if unlocked)",
         "  a-p          use consumable (in item menu)",
         "",
+        "LEVEL UP: pick 1 of 3 upgrades when XP threshold is met.",
         "Crits, misses, and stuns can turn the fight.",
         "The minimap (bottom right) shows explored layout."
     };
@@ -277,6 +279,33 @@ static void render_combat_items(Game *g, Tigr *screen) {
     if (!any) puts_px(screen, 2, y, C_DIM, "(no usable items)");
 }
 
+/* ---- Combat attack skill picker -----------------------------------------*/
+static void render_combat_attacks(Game *g, Tigr *screen) {
+    tigrFillRect(screen, 0, 200, SCREEN_W, 80, tigrRGBA(8, 8, 16, 220));
+    puts_at(screen, 2, 26, C_ACCENT, "==== ATTACK SKILLS (a-e) ====");
+    puts_at(screen, 2, 28, C_DIM, "select a skill   1 or ESC back");
+    char buf[120];
+    int y = 30 * CELL_H;
+    int n = combat_skill_count(g);
+    for (int i = 0; i < n; ++i) {
+        int sid = combat_skill_at(g, i);
+        if (sid < 0) continue;
+        const char *desc = "";
+        switch (sid) {
+            case SK_STRIKE:   desc = "standard hit"; break;
+            case SK_POWER:    desc = "1.5x dmg, +10% miss"; break;
+            case SK_PING:     desc = "fast hit, +25% crit"; break;
+            case SK_OVERFLOW: desc = "ignore half DEF, +2"; break;
+            case SK_SWEEP:    desc = "60% dmg to all adjacent"; break;
+            default: break;
+        }
+        snprintf(buf, sizeof buf, "%c) %-18s  %s",
+                 'a' + i, combat_skill_name(sid), desc);
+        puts_px(screen, 2, y, C_TEXT, buf);
+        y += 11;
+    }
+}
+
 /* ---- Main render --------------------------------------------------------*/
 void game_render(Game *g, Tigr *screen) {
     switch (g->state) {
@@ -287,7 +316,9 @@ void game_render(Game *g, Tigr *screen) {
         default: break;
     }
 
-    int in_combat = (g->state == GS_COMBAT || g->state == GS_COMBAT_ITEM);
+    int in_combat = (g->state == GS_COMBAT || g->state == GS_COMBAT_ITEM
+                     || g->state == GS_COMBAT_ATTACK);
+    int in_levelup = (g->state == GS_LEVEL_UP);
 
     tigrClear(screen, C_BG);
 
@@ -314,10 +345,14 @@ void game_render(Game *g, Tigr *screen) {
     /* Border between 3D view and bottom panel. */
     for (int x = 0; x < SCREEN_W; ++x) tigrPlot(screen, x, V3D_H, C_BORDER);
 
-    if (in_combat) {
+    if (in_combat || in_levelup) {
         combat_render_hud(g, screen, 0, PANEL_TOP, SCREEN_W, SCREEN_H - PANEL_TOP);
         if (g->state == GS_COMBAT_ITEM)
             render_combat_items(g, screen);
+        if (g->state == GS_COMBAT_ATTACK)
+            render_combat_attacks(g, screen);
+        if (g->state == GS_LEVEL_UP)
+            levelup_render(g, screen);
     } else {
         /* Message log (newest at top). */
         for (int i = 0; i < LOG_ROWS; ++i) {

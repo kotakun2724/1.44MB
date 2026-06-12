@@ -96,10 +96,59 @@ static int combat_select_by_slot(Game *g, int slot) {
     return 1;
 }
 
+static const char *SKILL_NAMES[SK_MAX] = {
+    "Strike", "Overclock", "Quick Ping", "Buffer Overflow", "Defrag Sweep"
+};
+
+const char *combat_skill_name(int skill_id) {
+    if (skill_id < 0 || skill_id >= SK_MAX) return "?";
+    return SKILL_NAMES[skill_id];
+}
+
+int combat_skill_count(const Game *g) {
+    int n = 0;
+    for (int i = 0; i < SK_MAX; ++i)
+        if (g->player.skills.unlocked & (1 << i)) n++;
+    return n;
+}
+
+int combat_skill_at(const Game *g, int slot) {
+    int n = 0;
+    for (int i = 0; i < SK_MAX; ++i) {
+        if (g->player.skills.unlocked & (1 << i)) {
+            if (n == slot) return i;
+            n++;
+        }
+    }
+    return -1;
+}
+
+static int combat_weapon_bonus(const Game *g) {
+    if (g->wielded >= 0 && g->inv[g->wielded].def >= 0)
+        return ITEMS[g->inv[g->wielded].def].power;
+    return 0;
+}
+
+static int combat_crit_chance(const Game *g, int skill_id, int bonus) {
+    int weapon_bonus = combat_weapon_bonus(g);
+    int crit = 10 + weapon_bonus * 2 + g->player.skills.crit_bonus + bonus;
+    if (crit > 50) crit = 50;
+    return crit;
+}
+
+static void combat_apply_kill_heal(Game *g) {
+    int heal = g->player.skills.kill_heal;
+    if (heal <= 0) return;
+    g->player.hp += heal;
+    if (g->player.hp > g->player.hp_max) g->player.hp = g->player.hp_max;
+    msg_push(&g->log, "Data drain restores %d HP.", heal);
+}
+
 void combat_mob_defeat(Game *g, Mob *m, int crit_msg) {
     const MobType *t = &MOB_TYPES[m->kind];
     m->alive = 0;
     g->player.xp += t->xp;
+    combat_apply_kill_heal(g);
     if (t->boss) {
         msg_push(&g->log, "** %s collapses into clean bytes! **", t->name);
     } else {
@@ -111,47 +160,26 @@ void combat_mob_defeat(Game *g, Mob *m, int crit_msg) {
     while (g->player.xp >= need) {
         g->player.xp -= need;
         g->player.level++;
-        g->player.hp_max += 4;
+        g->player.hp_max += 2;
         g->player.hp = g->player.hp_max;
-        g->player.atk += 1;
-        if ((g->player.level % 3) == 0) g->player.def += 1;
-        msg_push(&g->log, "** Recompiled to Lv %d! **", g->player.level);
+        g->levelup.pending++;
         need = 10 * g->player.level;
     }
-    if (t->boss && g->player.depth >= FINAL_DEPTH) {
-        g->state = GS_WIN;
-        msg_push(&g->log, "** The disk is whole. You win. **");
-    }
+    if (t->boss && g->player.depth >= FINAL_DEPTH)
+        g->levelup.boss_win = 1;
+    levelup_queue(g);
 }
 
-static void combat_player_attack(Game *g, Mob *m) {
+static void combat_hit_mob(Game *g, Mob *m, int dmg, int crit, const char *verb) {
     const MobType *t = &MOB_TYPES[m->kind];
-    int miss_chance = 5;
-    if (t->ai & AI_ERRATIC) miss_chance += 5;
-    if (rng_chance(&g->rng, miss_chance)) {
-        msg_push(&g->log, "You miss the %s!", t->name);
-        return;
-    }
-
-    int weapon_bonus = 0;
-    if (g->wielded >= 0 && g->inv[g->wielded].def >= 0)
-        weapon_bonus = ITEMS[g->inv[g->wielded].def].power;
-
-    int crit_chance = 10 + weapon_bonus * 2;
-    if (crit_chance > 40) crit_chance = 40;
-
-    int dmg = player_total_atk(g) - t->def + rng_range(&g->rng, -1, 1);
-    int crit = rng_chance(&g->rng, crit_chance);
-    if (crit) dmg = dmg * 2 + 1;
     if (dmg < 1) dmg = 1;
-
     m->hp -= dmg;
     if (m->hp <= 0) {
         combat_mob_defeat(g, m, crit);
     } else {
-        msg_push(&g->log, crit ? "CRIT! You hit the %s for %d."
-                                : "You hit the %s for %d.",
-                 t->name, dmg);
+        msg_push(&g->log, crit ? "CRIT! %s the %s for %d."
+                                : "%s the %s for %d.",
+                 verb, t->name, dmg);
         if (crit) {
             int stun_chance = (t->ai & AI_TOUGH) ? 15 : 40;
             if (rng_chance(&g->rng, stun_chance)) {
@@ -160,6 +188,90 @@ static void combat_player_attack(Game *g, Mob *m) {
             }
         }
     }
+}
+
+static void combat_use_skill(Game *g, Mob *m, int skill_id) {
+    const MobType *t = &MOB_TYPES[m->kind];
+    int miss_chance = 5;
+    if (t->ai & AI_ERRATIC) miss_chance += 5;
+
+    switch (skill_id) {
+        case SK_POWER: miss_chance += 10; break;
+        default: break;
+    }
+
+    if (rng_chance(&g->rng, miss_chance)) {
+        msg_push(&g->log, "You miss the %s!", t->name);
+        return;
+    }
+
+    int atk = player_total_atk(g);
+    int def = t->def;
+    int crit_bonus = 0;
+    int dmg;
+    const char *verb = "You hit";
+
+    switch (skill_id) {
+        case SK_STRIKE:
+            dmg = atk - def + rng_range(&g->rng, -1, 1);
+            break;
+        case SK_POWER:
+            dmg = (atk - def + rng_range(&g->rng, -1, 1)) * 3 / 2;
+            verb = "You overclock-strike";
+            break;
+        case SK_PING:
+            dmg = (atk - def + rng_range(&g->rng, -1, 1)) * 4 / 5;
+            crit_bonus = 25;
+            verb = "You ping";
+            break;
+        case SK_OVERFLOW:
+            def = def / 2;
+            dmg = atk - def + 2 + rng_range(&g->rng, -1, 1);
+            verb = "You overflow";
+            break;
+        default:
+            dmg = atk - def + rng_range(&g->rng, -1, 1);
+            break;
+    }
+
+    int crit = rng_chance(&g->rng, combat_crit_chance(g, skill_id, crit_bonus));
+    if (crit) dmg = dmg * 2 + 1;
+    combat_hit_mob(g, m, dmg, crit, verb);
+}
+
+static void combat_after_player_action(Game *g);
+
+static void combat_use_sweep(Game *g) {
+    combat_refresh_adjacent(g);
+    if (g->combat.n_adjacent == 0) {
+        msg_push(&g->log, "No adjacent targets to sweep.");
+        return;
+    }
+    msg_push(&g->log, "You defrag-sweep adjacent foes!");
+    int atk = player_total_atk(g);
+    for (int i = 0; i < g->combat.n_adjacent; ++i) {
+        Mob *m = &g->mobs[g->combat.adjacent[i]];
+        if (!m->alive) continue;
+        const MobType *t = &MOB_TYPES[m->kind];
+        int dmg = (atk - t->def + rng_range(&g->rng, -1, 1)) * 3 / 5;
+        if (dmg < 1) dmg = 1;
+        combat_hit_mob(g, m, dmg, 0, "Sweep hits");
+        if (g->state == GS_LEVEL_UP || g->state == GS_DEAD || g->state == GS_WIN)
+            return;
+    }
+}
+
+void combat_attack_turn(Game *g, int skill_id) {
+    g->state = GS_COMBAT;
+    if (skill_id == SK_SWEEP) {
+        combat_use_sweep(g);
+    } else {
+        Mob *m = combat_target(g);
+        if (m && mob_is_adjacent(g, m))
+            combat_use_skill(g, m, skill_id);
+    }
+    if (g->state == GS_LEVEL_UP) return;
+    combat_after_player_action(g);
 }
 
 static void combat_mob_attack_player(Game *g, Mob *m) {
@@ -249,9 +361,9 @@ static void combat_leave(Game *g) {
 
 static int combat_try_flee(Game *g, Mob *m) {
     const MobType *t = &MOB_TYPES[m->kind];
-    int chance = 50 + g->player.level - t->min_depth;
+    int chance = 50 + g->player.level - t->min_depth + g->player.skills.flee_bonus;
     if (chance < 20) chance = 20;
-    if (chance > 85) chance = 85;
+    if (chance > 90) chance = 90;
 
     if (!rng_chance(&g->rng, chance)) {
         msg_push(&g->log, "You fail to retreat!");
@@ -281,15 +393,17 @@ static int combat_try_flee(Game *g, Mob *m) {
     return 1;
 }
 
-static void combat_after_player_action(Game *g);
-
 void combat_item_turn(Game *g) {
     g->state = GS_COMBAT;
     combat_after_player_action(g);
 }
 
+void combat_resume_after_action(Game *g) {
+    combat_after_player_action(g);
+}
+
 static void combat_after_player_action(Game *g) {
-    if (g->state == GS_DEAD || g->state == GS_WIN) return;
+    if (g->state == GS_DEAD || g->state == GS_WIN || g->state == GS_LEVEL_UP) return;
 
     Mob *m = combat_target(g);
     if (m && mob_is_adjacent(g, m) && g->state == GS_COMBAT) {
@@ -372,8 +486,12 @@ int combat_input(Game *g, int c) {
 
     switch (action) {
         case CA_ATTACK:
-            combat_player_attack(g, m);
-            break;
+            if (combat_skill_count(g) > 1) {
+                g->state = GS_COMBAT_ATTACK;
+                return 1;
+            }
+            combat_attack_turn(g, SK_STRIKE);
+            return 1;
         case CA_DEFEND:
             g->player.defending = 1;
             msg_push(&g->log, "You brace for impact.");
@@ -443,11 +561,25 @@ void combat_render_hud(Game *g, Tigr *screen, int x0, int y0, int w, int h) {
 
     /* Player row */
     int row2 = y0 + 28;
-    snprintf(buf, sizeof buf, "YOU  ATK %d  DEF %d",
-             player_total_atk(g), player_total_def(g));
+    snprintf(buf, sizeof buf, "YOU  ATK %d  DEF %d  Lv%d",
+             player_total_atk(g), player_total_def(g), g->player.level);
     if (g->player.defending) strncat(buf, " [DEFENDING]", sizeof buf - strlen(buf) - 1);
     if (g->player.stun_turns > 0) strncat(buf, " [STUNNED]", sizeof buf - strlen(buf) - 1);
     tigrPrint(screen, tfont, x0 + 44, row2, tigrRGB(200, 220, 255), "%s", buf);
+    {
+        char sk[64];
+        sk[0] = '\0';
+        int n = combat_skill_count(g);
+        for (int i = 0; i < n; ++i) {
+            int sid = combat_skill_at(g, i);
+            if (sid < 0) continue;
+            if (sk[0]) strncat(sk, ", ", sizeof sk - strlen(sk) - 1);
+            strncat(sk, combat_skill_name(sid), sizeof sk - strlen(sk) - 1);
+        }
+        if (sk[0])
+            tigrPrint(screen, tfont, x0 + 280, row2, tigrRGB(140, 180, 220),
+                      "Skills: %s", sk);
+    }
     draw_hp_bar(screen, x0 + 44, row2 + 12, 180, 8,
                 g->player.hp, g->player.hp_max, tigrRGB(60, 200, 80));
 
