@@ -6,7 +6,7 @@
  * 3D first-person input scheme (grid-locked, turn-based):
  *   W / S       step forward / backward (relative to facing)
  *   A / D       strafe left / right
- *   Q / E       turn 90 deg left / right (does NOT consume a turn)
+ *   Q / E       turn 45 deg left / right (does NOT consume a turn)
  *   . space     wait one turn
  *   >           descend stairs
  * Diagonal / vim / arrow keys are intentionally removed - they don't map
@@ -157,6 +157,22 @@ int main(int argc, char *argv[]) {
                 if (game.state == GS_DEAD) record_run(&game, 1);
                 else if (game.state == GS_WIN) record_run(&game, 2);
             }
+        } else if (game.state == GS_COMBAT_ATTACK) {
+            if (c == '1' || esc_pressed) {
+                game.state = GS_COMBAT;
+            } else if (c >= 'a' && c <= 'e') {
+                int slot = c - 'a';
+                if (slot < combat_skill_count(&game)) {
+                    int skill = combat_skill_at(&game, slot);
+                    if (skill >= 0) combat_attack_turn(&game, skill);
+                    if (game.state == GS_DEAD) record_run(&game, 1);
+                    else if (game.state == GS_WIN) record_run(&game, 2);
+                }
+            }
+        } else if (game.state == GS_LEVEL_UP) {
+            levelup_input(&game, c);
+            if (game.state == GS_DEAD) record_run(&game, 1);
+            else if (game.state == GS_WIN) record_run(&game, 2);
         } else if (game.state == GS_PLAYING) {
             if (c == 'i' || c == 'I') {
                 game.state = GS_INVENTORY;

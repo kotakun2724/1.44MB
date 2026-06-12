@@ -34,6 +34,34 @@ int map_blocks_sight(const Map *m, int x, int y) {
     return m->tile[y][x] == T_WALL || m->tile[y][x] == T_VOID;
 }
 
+static const V2 FACING8[8] = {
+    {0, -1}, {1, -1}, {1, 0}, {1, 1},
+    {0,  1}, {-1, 1}, {-1, 0}, {-1, -1}
+};
+
+static int facing8_index(int fx, int fy) {
+    for (int i = 0; i < 8; ++i)
+        if (FACING8[i].x == fx && FACING8[i].y == fy) return i;
+    return 0;
+}
+
+static V2 facing8_rotate(V2 f, int ccw) {
+    int idx = facing8_index(f.x, f.y);
+    /* FACING8 is clockwise; CCW (turn left) steps backward. */
+    idx = ccw ? (idx + 7) % 8 : (idx + 1) % 8;
+    return FACING8[idx];
+}
+
+static int can_step_to(const Game *g, int nx, int ny, int dx, int dy) {
+    if (!map_walkable(&g->map, nx, ny)) return 0;
+    if (dx && dy) {
+        if (!map_walkable(&g->map, g->player.pos.x + dx, g->player.pos.y) ||
+            !map_walkable(&g->map, g->player.pos.x, g->player.pos.y + dy))
+            return 0;
+    }
+    return 1;
+}
+
 /* ---- Game flow ----------------------------------------------------------*/
 void game_new(Game *g, uint32_t seed) {
     ScoreList saved = g->hiscores;
@@ -52,6 +80,13 @@ void game_new(Game *g, uint32_t seed) {
     g->player.facing  = (V2){ 0, -1 };  /* face north on entry */
     g->player.defending = 0;
     g->player.stun_turns = 0;
+    g->player.skills.unlocked = (1 << SK_STRIKE);
+    g->player.skills.crit_bonus = 0;
+    g->player.skills.kill_heal = 0;
+    g->player.skills.flee_bonus = 0;
+    g->levelup.pending = 0;
+    g->levelup.boss_win = 0;
+    g->levelup.n_choices = 0;
     g->combat.target_idx = -1;
     g->combat.phase = CP_PLAYER;
     g->combat.n_adjacent = 0;
@@ -85,20 +120,11 @@ void game_step(Game *g, int dx, int dy, int action) {
     if (g->state != GS_PLAYING) return;
     g->took_turn = 0;
 
-    /* Turn-in-place: rotate facing 90 degrees, do NOT consume a turn. */
+    /* Turn-in-place: rotate facing 45 degrees, do NOT consume a turn. */
     if (action == ACT_TURN_L || action == ACT_TURN_R) {
-        int fx = g->player.facing.x;
-        int fy = g->player.facing.y;
-        if (fx == 0 && fy == 0) { fy = -1; }
-        if (action == ACT_TURN_L) {
-            /* 90 deg CCW: (x,y) -> (y, -x) */
-            g->player.facing.x = fy;
-            g->player.facing.y = -fx;
-        } else {
-            /* 90 deg CW:  (x,y) -> (-y, x) */
-            g->player.facing.x = -fy;
-            g->player.facing.y = fx;
-        }
+        V2 f = g->player.facing;
+        if (f.x == 0 && f.y == 0) f = (V2){ 0, -1 };
+        g->player.facing = facing8_rotate(f, action == ACT_TURN_L);
         map_compute_fov(&g->map, g->player.pos.x, g->player.pos.y, FOV_RADIUS,
                         g->player.facing);
         return;
@@ -114,7 +140,7 @@ void game_step(Game *g, int dx, int dy, int action) {
         if (target) {
             msg_push(&g->log, "The %s blocks your path.",
                      MOB_TYPES[target->kind].name);
-        } else if (map_walkable(&g->map, nx, ny)) {
+        } else if (can_step_to(g, nx, ny, dx, dy)) {
             g->player.pos.x = nx;
             g->player.pos.y = ny;
             item_pickup_under(g);

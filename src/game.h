@@ -60,10 +60,42 @@ typedef struct {
     V2 down_stair;
 } Map;
 
+/* ---- Combat skills ------------------------------------------------------*/
+#define SK_MAX 5
+enum {
+    SK_STRIKE = 0,
+    SK_POWER,
+    SK_PING,
+    SK_OVERFLOW,
+    SK_SWEEP
+};
+
+typedef struct {
+    int unlocked;    /* bitmask: 1<<SK_* */
+    int crit_bonus;  /* passive crit chance bonus (%) */
+    int kill_heal;   /* passive HP on kill */
+    int flee_bonus;  /* passive flee chance bonus (%) */
+} PlayerSkills;
+
+/* ---- Level-up upgrades --------------------------------------------------*/
+enum {
+    UP_HP = 0,
+    UP_ATK,
+    UP_DEF,
+    UP_CRIT,
+    UP_DRAIN,
+    UP_ESCAPE,
+    UP_SKILL_POWER,
+    UP_SKILL_PING,
+    UP_SKILL_OVERFLOW,
+    UP_SKILL_SWEEP,
+    UP_N
+};
+
 /* ---- Player -------------------------------------------------------------*/
 typedef struct {
     V2 pos;
-    V2 facing;      /* {-1..1, -1..1}, last move direction; {0,-1} initially */
+    V2 facing;      /* 8-way {-1,0,1}; {0,-1} initially */
     int hp, hp_max;
     int atk, def;
     int xp, level;
@@ -73,6 +105,7 @@ typedef struct {
     int hunger;     /* 0=full; ticks up over time */
     int defending;  /* 1 = next incoming hit is halved (+2 DEF) */
     int stun_turns; /* skip next player combat action */
+    PlayerSkills skills;
 } Player;
 
 #define HUNGER_HUNGRY    500
@@ -192,6 +225,8 @@ typedef enum {
     GS_PLAYING,
     GS_COMBAT,
     GS_COMBAT_ITEM,
+    GS_COMBAT_ATTACK,
+    GS_LEVEL_UP,
     GS_INVENTORY,
     GS_HELP,
     GS_DEAD,
@@ -222,6 +257,14 @@ enum {
     CA_ITEM,
     CA_FLEE
 };
+
+typedef struct {
+    int choices[3];
+    int n_choices;
+    int pending;
+    int boss_win;    /* defer GS_WIN until level-up resolved */
+    GameState return_state;
+} LevelUpState;
 
 /* ---- High scores --------------------------------------------------------*/
 #define MAX_SCORES 8
@@ -267,6 +310,7 @@ typedef struct {
     ScoreList hiscores;    /* loaded at app start */
     int       run_recorded;/* 1 once we've inserted the current run */
     CombatState combat;
+    LevelUpState levelup;
 } Game;
 
 /* ---- Game flow ----------------------------------------------------------*/
@@ -281,7 +325,7 @@ void render3d_minimap(Game *g, Tigr *s, int x0, int y0, int cell);
 Tigr *render3d_mob_sprite(int kind);
 
 /* Actions (non-movement). Movement uses dx/dy != 0.
- * ACT_TURN_L / ACT_TURN_R rotate the player's facing 90 degrees without
+ * ACT_TURN_L / ACT_TURN_R rotate the player's facing 45 degrees without
  * consuming a turn (mobs do not act). */
 enum {
     ACT_NONE = 0,
@@ -313,6 +357,19 @@ int  combat_input(Game *g, int c);
 void combat_render_hud(Game *g, Tigr *screen, int x0, int y0, int w, int h);
 Mob *combat_target(Game *g);
 void combat_mob_defeat(Game *g, Mob *m, int crit_msg);
+void combat_attack_turn(Game *g, int skill_id);
+void combat_resume_after_action(Game *g);
+int  combat_skill_count(const Game *g);
+int  combat_skill_at(const Game *g, int slot);
+const char *combat_skill_name(int skill_id);
+
+/* ---- Level-up (see src/levelup.c) ---------------------------------------*/
+void levelup_begin(Game *g);
+void levelup_queue(Game *g);
+int  levelup_input(Game *g, int c);
+void levelup_render(Game *g, Tigr *screen);
+const char *levelup_choice_name(int up_id);
+const char *levelup_choice_desc(int up_id);
 
 /* ---- Items / inventory --------------------------------------------------*/
 void item_init_knowledge(Game *g);
